@@ -1,8 +1,14 @@
 # Review Artifact Protocol
 
-This document describes the implemented v1 review-artifact protocol. It is a
-public contract for reproducibility and fail-closed verification; it does not
-grant review acceptance, implementation authority, or an automatic next step.
+This document records the v1 review-artifact protocol used by the private
+development and review workflow. The clean public source candidate retains the
+contract for design traceability but intentionally omits the private package
+builder, dispatcher, verifier, platform-evidence records, and review history.
+It is therefore not a command reference and does not grant review acceptance,
+implementation authority, or an automatic next step. The shipped public
+review-facing surface is `acgps/review_adapter.py`; deterministic public source
+archives are built by `scripts/build_mvp_source_archive.py`. Neither implements
+the complete private protocol described below.
 
 ## Hash domains and source authority
 
@@ -121,8 +127,9 @@ Stable error families include:
 
 ## Protocol dispatch and compatibility
 
-`scripts/review_protocol_dispatch.py` reads exactly one direct
-`SOURCE_MANIFEST.json` and rejects duplicate JSON keys before dispatch.
+The private protocol dispatcher, which is not included in the clean public
+source candidate, reads exactly one direct `SOURCE_MANIFEST.json` and rejects
+duplicate JSON keys before dispatch.
 
 - `manifest_type: SOURCE_MANIFEST`, integer `hash_protocol_version: 1`, and no
   `source_inventory_protocol_version` selects the immutable legacy v1 verifier.
@@ -196,15 +203,9 @@ Architecture and implementation acceptance fields also remain false unless a
 later, separate Human/Controller transition records them. A successful build is
 only an artifact-protocol result.
 
-The executable contract is implemented by:
-
-- `scripts/review_source_inventory.py`
-- `scripts/build_review_evidence.py`
-- `scripts/build_design_bundle.py`
-- `scripts/build_review_package.py`
-- `scripts/build_review_platform_matrix.py`
-- `scripts/review_acceptance_evidence.py`
-- `scripts/review_protocol_dispatch.py`
-- `scripts/verify_review_bundle.py`
-- `tests/test_review_source_inventory.py`
-- `tests/test_review_artifact_pipeline.py`
+The complete executable protocol is private development tooling and is not
+included in the clean public source candidate. Within this distribution,
+`acgps/review_adapter.py` validates review evidence used by release-candidate
+manifests, and `scripts/build_mvp_source_archive.py` creates the deterministic
+source archive. These public surfaces do not claim to construct or verify the
+complete review bundle described by this protocol.

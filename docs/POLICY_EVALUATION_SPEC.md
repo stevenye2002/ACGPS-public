@@ -73,7 +73,7 @@ Profile-only trigger registration must be explicit in the selected profile's `ri
 
 `config/policy_eval_cases.yaml` is a versioned eval catalog. It must include positive, human-gate, UI-route, production-boundary, unknown-ID, actual-raise, deterministic replay, malformed-input, duplicate-discovery, unknown-version, attempted-downgrade, conflict, missing-policy, order-perturbation, and type-confusion coverage before WP-2 implementation can be accepted. Negative fixture cases may use a case-level `fixture_id` test-harness field outside `input`; that field is not part of the public `PolicyEvaluationInput` contract.
 
-Current entry-gate evals define the executable oracle shape. `scripts/validate_spec.py` derives the expected policy result from the policy files and rejects mutations to risk level, human gate, skills, roles, gates, transitions, fail-closed errors, issues, or provenance before implementation begins. Set-like input order must not change canonical result bytes; duplicate set-like input members are rejected rather than silently deduplicated.
+The shipped executable checks define the oracle shape. `scripts/run_policy_eval_fixtures.py` exercises the shared loader and evaluator against the versioned fixture catalog, while `python scripts/check.py full` covers deterministic replay and mutations to risk level, human gate, skills, roles, gates, transitions, fail-closed errors, issues, and provenance. Set-like input order must not change canonical result bytes; duplicate set-like input members are rejected rather than silently deduplicated.
 
 ## Security Controls
 

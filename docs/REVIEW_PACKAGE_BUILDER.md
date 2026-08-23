@@ -1,10 +1,17 @@
 # Review Package Builder
 
-`scripts/build_review_package.py` is the v0.1 single-entry review-package
-builder. It orchestrates committed-source export, evidence construction, bundle
-construction, protocol verification, create-once publication, and the final
-ready-record commit point. A successful build is not an independent review,
-semantic acceptance, implementation authorization, or release decision.
+This document records the v0.1 private review-package builder contract. The
+clean public source candidate intentionally omits that builder, its publication
+tooling, platform-evidence records, and private review history; this document is
+not a public command reference. The shipped `acgps/review_adapter.py` provides
+the narrower release-candidate review-evidence boundary, and
+`scripts/build_mvp_source_archive.py` builds deterministic public source
+archives. Neither implements the complete builder described below. In the
+private workflow, the builder orchestrates committed-source export, evidence
+construction, bundle construction, protocol verification, create-once
+publication, and the final ready-record commit point. A successful build is not
+an independent review, semantic acceptance, implementation authorization, or
+release decision.
 
 ## Result and failure contract
 

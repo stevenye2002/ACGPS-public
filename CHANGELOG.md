@@ -25,5 +25,5 @@
 
 ### Review
 
-- R02 external design review findings were triaged in `reviews/responses/DESIGN_FINDING_RESPONSE_ACGPS-v0.1-wp1-WP1-R02-20260722T015056Z.md`.
+- R02 external design review findings were triaged in the private development record, which is not included in the clean public source candidate.
 - P2 findings are retained as backlog and are not blockers for the revised design review submission.
