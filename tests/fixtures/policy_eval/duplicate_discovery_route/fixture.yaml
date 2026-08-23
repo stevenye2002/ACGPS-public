@@ -1,0 +1,3 @@
+schema_version: 1
+fixture_kind: skill_routing_variant
+policy_root: policy_root

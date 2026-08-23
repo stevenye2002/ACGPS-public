@@ -1,0 +1,3 @@
+error_code: POLICY_UNSUPPORTED_VERSION
+path: config/risk_policy.yaml:schema_version
+message: unsupported policy schema version

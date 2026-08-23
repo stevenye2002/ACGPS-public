@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACGPS Review Profile Registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_id", "profiles"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "registry_id": {"const": "ACGPS_REVIEW_PROFILES_V1"},
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profile_id",
+          "match_contains",
+          "review_kind",
+          "work_package",
+          "review_track_id",
+          "expected_success_signal",
+          "current_state",
+          "authoritative_builder_adoption_authorized",
+          "implementation_authorized",
+          "target_signal_issued"
+        ],
+        "properties": {
+          "profile_id": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+          "match_contains": {"type": "string", "minLength": 1},
+          "review_kind": {"enum": ["ENTRY_GATE", "IMPLEMENTATION_REVIEW"]},
+          "work_package": {"type": "string", "minLength": 1},
+          "review_track_id": {"type": "string", "minLength": 1},
+          "expected_success_signal": {"type": "string", "minLength": 1},
+          "current_state": {"type": "string", "minLength": 1},
+          "authoritative_builder_adoption_authorized": {"type": "boolean"},
+          "implementation_authorized": {"type": "boolean"},
+          "target_signal_issued": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+schema_version: 1
+finding_id: F-0001
+review_id: REVIEW-0001
+severity: P1
+category: correctness
+summary: Contract accepted malformed input
+evidence_paths:
+  - tests/test_contracts.py
+impact: Workflow could advance invalid records
+recommendation: Add runtime semantic validation
+disposition: ACCEPTED
+status: OPEN
+rationale: Reproduced locally
+verification_required:
+  - python scripts/check.py full

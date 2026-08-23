@@ -1,0 +1,26 @@
+schema_version: 1
+policy_id: model-routing-v1
+roles:
+  planner_architect:
+    capability: strongest_available_reasoning
+  deep_research:
+    capability: strongest_with_source_tools
+  coder_mechanical:
+    capability: efficient_coding
+  coder_integration:
+    capability: strong_coding
+  task_reviewer:
+    capability: independent_risk_matched
+    independent_context: true
+  final_reviewer:
+    capability: strongest_available_reasoning
+    independent_context: true
+  verifier:
+    capability: tools_first
+    model_role: evidence_summary_only
+escalate_when:
+  - multi_contract_coordination
+  - security_or_concurrency
+  - temporal_or_audit_integrity
+  - financial_logic
+  - repeated_non_converging_fix_loop

@@ -1,0 +1,209 @@
+schema_version: 1
+catalog_id: WP3_TASK1_INVARIANTS.v1
+invariant_dsl:
+  schema_version: 1
+  schema_authority: CODE_OWNED_FIXED_SCHEMA
+  field_path_policy: CODE_OWNED_DOTTED_PATHS
+  opcodes:
+    - equal
+    - must_be_null
+    - must_be_non_null
+    - member_of
+    - derived_path
+    - increment_by
+    - allowed_only_when
+operation_graphs:
+  initialization:
+    operation_kind: INITIALIZATION
+    result_contract: WorkflowTaskInitializationResult.v1
+    audit_event_type: TASK_CREATED
+    result_audit_bindings:
+      audit_event_id: planned_audit_event.event_id
+      audit_generation: planned_audit_event.generation
+      audit_sequence: planned_audit_event.sequence
+    state_audit_bindings:
+      audit_head_event_id: planned_audit_event.event_id
+      audit_head_hash: planned_audit_event.event_hash
+      audit_generation: planned_audit_event.generation
+    request_audit_bindings:
+      actor: planned_audit_event.actor
+    state_null_bindings:
+      policy_evaluation_id: null
+      pending_decision_id: null
+  transition:
+    operation_kind: TRANSITION
+    result_contract: WorkflowTransitionResult.v1
+    audit_event_type: TRANSITION_ACCEPTED
+    binding_copies:
+      decision_resolution_binding: planned_audit_event.decision_resolution_binding
+      policy_evaluation_binding: planned_audit_event.policy_evaluation_binding
+      evidence_bindings: planned_audit_event.evidence_bindings
+    identity_bindings:
+      transition_actor:
+        planned_audit_event.actor: canonical_request.actor
+recovery_graph:
+  recovery_reason_registry:
+    - AUDIT_TAIL_CORRUPT
+    - STATE_AUDIT_MISMATCH
+    - TRANSACTION_PHASE_STALE
+    - THREAT_MODEL_LIMIT
+    - OPERATOR_REQUESTED_ROLLBACK
+  artifact_truth_table:
+    replay:
+      accepted:
+        quarantine_path: null
+        new_generation: null
+        started_by_event_id: null
+        started_by_event_type: null
+    classify_threat_model_limit:
+      accepted:
+        quarantine_path: null
+        new_generation: null
+        started_by_event_id: null
+        started_by_event_type: null
+    quarantine_and_start_generation:
+      accepted:
+        quarantine_path: planned_quarantine_manifest.destination_path
+        new_generation: planned_generation_event.generation
+        started_by_event_id: planned_generation_event.event_id
+        started_by_event_type: planned_generation_event.event_type
+    rollback_to_valid_prefix:
+      accepted:
+        quarantine_path: planned_quarantine_manifest.destination_path
+        new_generation: planned_generation_event.generation
+        started_by_event_id: planned_generation_event.event_id
+        started_by_event_type: planned_generation_event.event_type
+  result_status_truth_table:
+    fail_closed:
+      accepted: false
+      fail_closed: true
+      side_effect_fields_must_be_null:
+        - quarantine_path
+        - new_generation
+        - started_by_event_id
+        - started_by_event_type
+        - resulting_state
+      planned_artifacts_must_be_null:
+        - planned_quarantine_manifest
+        - planned_generation_event
+        - planned_state
+        - planned_idempotency_record
+    diagnostic_only:
+      accepted: false
+      fail_closed: false
+      side_effect_fields_must_be_null:
+        - quarantine_path
+        - new_generation
+        - started_by_event_id
+        - started_by_event_type
+        - resulting_state
+      planned_artifacts_must_be_null:
+        - planned_quarantine_manifest
+        - planned_generation_event
+        - planned_state
+        - planned_idempotency_record
+  identity_bindings:
+    request_generation_actor:
+      planned_generation_event.actor: canonical_recovery_request.actor
+  quarantine_bindings:
+    planned_quarantine_manifest.source_path: canonical_recovery_request.observed_audit_path
+    planned_quarantine_manifest.destination_path: canonical_recovery_result.quarantine_path
+    planned_generation_event.details.quarantine_path: planned_quarantine_manifest.destination_path
+    planned_generation_event.details.audit_generation.quarantine_path: planned_quarantine_manifest.destination_path
+  trusted_prefix_bindings:
+    canonical_recovery_result.previous_generation: planned_recovery_record.diagnostic.previous_trusted_prefix.generation
+    canonical_recovery_result.previous_valid_head_hash: planned_recovery_record.diagnostic.previous_trusted_prefix.event_hash
+    planned_generation_event.details.previous_trusted_prefix: planned_recovery_record.diagnostic.previous_trusted_prefix
+    planned_generation_event.details.audit_generation.predecessor_generation: planned_recovery_record.diagnostic.previous_trusted_prefix.generation
+    planned_generation_event.details.audit_generation.predecessor_valid_head_hash: planned_recovery_record.diagnostic.previous_trusted_prefix.event_hash
+  generation_continuity:
+    new_generation:
+      predecessor: planned_recovery_record.diagnostic.previous_trusted_prefix.generation
+      increment: 1
+      result_field: canonical_recovery_result.new_generation
+      matching_fields:
+        - planned_generation_event.generation
+        - planned_generation_event.details.audit_generation.generation
+        - planned_state.audit_generation
+  path_derivations:
+    quarantine_destination:
+      field: planned_quarantine_manifest.destination_path
+      template: state/quarantine/{canonical_recovery_request.task_id}/{canonical_recovery_request.recovery_id}/audit-tail.bin
+event_type_matrix:
+  TASK_CREATED:
+    required:
+      - details.audit_generation
+    nullable:
+      - from_state
+      - to_state
+      - transition_id
+      - policy_evaluation_binding
+      - decision_resolution_binding
+    empty:
+      - evidence_bindings
+    generation_role:
+      sequence: 1
+      generation: 1
+      first_event_type: TASK_CREATED
+    context_bindings: {}
+  TRANSITION_ACCEPTED:
+    required:
+      - from_state
+      - to_state
+      - transition_id
+      - policy_evaluation_binding
+    nullable:
+      - decision_resolution_binding
+    non_empty:
+      - evidence_bindings
+    generation_role:
+      sequence_must_not_be: 1
+    context_bindings:
+      policy_project_id: project_id
+      policy_task_id: task_id
+      policy_authorizes_to_state: to_state
+      decision_only_from_state: WAITING_HUMAN
+  RECOVERY_RECORDED:
+    required:
+      - details.recovery_id
+      - details.recovery_action
+      - details.recovery_transaction_id
+      - details.previous_trusted_prefix
+      - details.quarantine_path
+      - details.threat_model
+      - details.audit_generation
+    nullable:
+      - from_state
+      - to_state
+      - transition_id
+      - policy_evaluation_binding
+      - decision_resolution_binding
+    empty:
+      - evidence_bindings
+    generation_role:
+      sequence: 1
+      minimum_generation: 2
+      first_event_type: RECOVERY_RECORDED
+    context_bindings: {}
+  ROLLBACK_RECORDED:
+    required:
+      - details.recovery_id
+      - details.recovery_action
+      - details.recovery_transaction_id
+      - details.previous_trusted_prefix
+      - details.quarantine_path
+      - details.threat_model
+      - details.audit_generation
+    nullable:
+      - from_state
+      - to_state
+      - transition_id
+      - policy_evaluation_binding
+      - decision_resolution_binding
+    empty:
+      - evidence_bindings
+    generation_role:
+      sequence: 1
+      minimum_generation: 2
+      first_event_type: ROLLBACK_RECORDED
+    context_bindings: {}

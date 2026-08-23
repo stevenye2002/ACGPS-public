@@ -1,0 +1,15 @@
+{
+  "category": "correctness",
+  "disposition": "ALREADY_FIXED",
+  "evidence_paths": ["evidence/review.txt"],
+  "finding_id": "finding-1",
+  "impact": "No blocking impact remains.",
+  "rationale": "Verified against the frozen source.",
+  "recommendation": "Keep the bounded implementation.",
+  "review_id": "review-1",
+  "schema_version": 1,
+  "severity": "P1",
+  "status": "CLOSED",
+  "summary": "Frozen candidate is acceptable.",
+  "verification_required": ["focused tests"]
+}

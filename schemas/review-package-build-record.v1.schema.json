@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Package Build Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "logical_round_id",
+    "git_commit",
+    "git_tree_id",
+    "source_archive_sha256",
+    "package_zip",
+    "package_zip_sha256",
+    "detached_sha256",
+    "windows_sidecar_ref",
+    "linux_sidecar_ref",
+    "platform_matrix_ref",
+    "candidate_sha256",
+    "source_commit",
+    "source_tree",
+    "source_inventory_protocol_version",
+    "inventory_digest",
+    "source_baseline_digest",
+    "packaged_source_digest",
+    "source_manifest_projection_digest",
+    "source_inventory_count",
+    "source_baseline_count",
+    "packaged_source_count",
+    "source_manifest_count",
+    "stage_timings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "record_type": {
+      "const": "REVIEW_PACKAGE_BUILD_RECORD"
+    },
+    "logical_round_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "git_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "git_tree_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "source_archive_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "package_zip_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "package_zip": {
+      "type": "string",
+      "minLength": 1
+    },
+    "detached_sha256": {
+      "type": "string",
+      "minLength": 1
+    },
+    "windows_sidecar_ref": {"$ref": "#/$defs/platformEvidenceSidecarRef"},
+    "linux_sidecar_ref": {"$ref": "#/$defs/platformEvidenceSidecarRef"},
+    "platform_matrix_ref": {"$ref": "#/$defs/platformMatrixRef"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_inventory_protocol_version": {"const": 1},
+    "inventory_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_baseline_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "packaged_source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_manifest_projection_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_inventory_count": {"type": "integer", "minimum": 0},
+    "source_baseline_count": {"type": "integer", "minimum": 0},
+    "packaged_source_count": {"type": "integer", "minimum": 0},
+    "source_manifest_count": {"type": "integer", "minimum": 0},
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_profile_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stage_timings": {
+      "$ref": "#/$defs/stageTimings"
+    }
+  },
+  "$defs": {
+    "platformEvidenceSidecarRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "candidate_sha256", "platform"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*:)(?!.*[. ]$)[^/\\\\]+$",
+          "not": {
+            "anyOf": [
+              {"enum": [".", ".."]},
+              {"pattern": "^(?:[Cc][Oo][Nn]|[Cc][Oo][Nn][Ii][Nn][$]|[Cc][Oo][Nn][Oo][Uu][Tt][$]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\..*)?$"}
+            ]
+          }
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "platform": {"enum": ["windows", "linux"]}
+      }
+    },
+    "platformMatrixRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "candidate_sha256", "matrix_identity"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*:)(?!.*[. ]$)[^/\\\\]+$",
+          "not": {
+            "anyOf": [
+              {"enum": [".", ".."]},
+              {"pattern": "^(?:[Cc][Oo][Nn]|[Cc][Oo][Nn][Ii][Nn][$]|[Cc][Oo][Nn][Oo][Uu][Tt][$]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\..*)?$"}
+            ]
+          }
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "matrix_identity": {"const": "TASK6_MINIMAL_PLATFORM_MATRIX_V1"}
+      }
+    },
+    "stageTimings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validation_elapsed_seconds",
+        "source_export_elapsed_seconds",
+        "evidence_elapsed_seconds",
+        "evidence_materialization_elapsed_seconds",
+        "manifest_generation_elapsed_seconds",
+        "bundle_elapsed_seconds",
+        "promotion_elapsed_seconds",
+        "verification_elapsed_seconds",
+        "publication_elapsed_seconds",
+        "cleanup_elapsed_seconds",
+        "total_elapsed_seconds"
+      ],
+      "properties": {
+        "validation_elapsed_seconds": {"type": "number", "minimum": 0},
+        "source_export_elapsed_seconds": {"type": "number", "minimum": 0},
+        "evidence_elapsed_seconds": {"type": "number", "minimum": 0},
+        "evidence_materialization_elapsed_seconds": {"type": "number", "minimum": 0},
+        "manifest_generation_elapsed_seconds": {"type": "number", "minimum": 0},
+        "bundle_elapsed_seconds": {"type": "number", "minimum": 0},
+        "promotion_elapsed_seconds": {"type": "number", "minimum": 0},
+        "verification_elapsed_seconds": {"type": "number", "minimum": 0},
+        "publication_elapsed_seconds": {"type": "number", "minimum": 0},
+        "cleanup_elapsed_seconds": {"type": "number", "minimum": 0},
+        "total_elapsed_seconds": {"type": "number", "minimum": 0}
+      }
+    }
+  }
+}

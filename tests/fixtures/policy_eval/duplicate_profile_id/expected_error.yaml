@@ -1,0 +1,3 @@
+error_code: POLICY_DUPLICATE_PROFILE_ID
+path: project_profiles/ftic.yaml:profile_id
+message: duplicate profile_id detected

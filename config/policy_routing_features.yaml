@@ -1,0 +1,73 @@
+schema_version: 1
+policy_id: policy-routing-features-v1
+task_attributes:
+  change_type:
+    allowed_values:
+      - architecture_decision
+      - malformed_policy
+      - profile_validation
+      - release_request
+      - review_artifact
+      - type_confusion
+      - ui_design
+      - ftic_report_copy
+    maps_to_features:
+      ui_design:
+        - new_ui
+      review_artifact:
+        - before_integration
+  surface:
+    allowed_values:
+      - figma_required
+    maps_to_features:
+      figma_required:
+        - new_ui
+        - critical_user_flow
+risk_conditions:
+  R0: []
+  R1: []
+  R2:
+    - risk_R2
+    - multi_step
+  R3:
+    - risk_R3
+    - multi_step
+skill_rule_features:
+  superpowers_writing_plans:
+    when_any:
+      - multi_step
+      - multi_file
+      - integration
+      - risk_R2
+      - risk_R3
+  superpowers_requesting_code_review:
+    when_any:
+      - before_integration
+      - formal_milestone
+      - rc_candidate
+      - risk_R2
+      - risk_R3
+  figma_design:
+    when_any:
+      - new_ui
+      - critical_user_flow
+      - responsive_layout
+      - design_system_change
+      - high_fidelity_experience
+  superpowers_verification_before_completion:
+    always: true
+model_role_rules:
+  planner:
+    always: planner_architect
+  reviewer:
+    R1: task_reviewer
+    R2: task_reviewer
+    R3: final_reviewer
+  verifier:
+    R2: verifier
+    R3: verifier
+canonical_order:
+  set_like_inputs:
+    - risk_triggers
+    - human_triggers
+  order_source: policy_declaration_order

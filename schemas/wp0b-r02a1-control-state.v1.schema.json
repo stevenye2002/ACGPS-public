@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "acgps://schemas/wp0b-r02a1-control-state.v1.schema.json",
+  "title": "WP0B R02A1 Closure In Place Control State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "application_family_id",
+    "application_id",
+    "submission_id",
+    "package_revision",
+    "supersedes_submission_id",
+    "submission_artifact_name",
+    "work_package_id",
+    "package_review_kind",
+    "underlying_application_review_kind",
+    "underlying_review_target",
+    "current_review_target",
+    "current_review_decision_options",
+    "recommended_option",
+    "target_signal",
+    "target_signal_eligibility",
+    "target_signal_issued",
+    "implementation_authorized",
+    "implementation_authorization_eligibility",
+    "automatic_next_authorized",
+    "wp3_task2_runtime_authorized",
+    "wp3_task3_authorized",
+    "wp0b_implementation_authorized",
+    "strategy_v2_integration_authorized",
+    "release_or_deployment_authorized",
+    "decision_request_status",
+    "default_without_decision",
+    "post_acceptance_controller_decision_required"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "application_family_id": {
+      "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE"
+    },
+    "application_id": {
+      "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE-20260731"
+    },
+    "submission_id": {
+      "const": "ACGPS-WP0B-R02A1-CIP-20260731T151854Z"
+    },
+    "package_revision": {
+      "const": 8
+    },
+    "supersedes_submission_id": {
+      "const": "ACGPS-WP0B-R02A1-CIP-20260731T142539Z"
+    },
+    "submission_artifact_name": {
+      "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE-20260731T151854Z.zip"
+    },
+    "work_package_id": {
+      "const": "WP0B"
+    },
+    "package_review_kind": {
+      "const": "ENTRY_GATE_DELTA_CLOSURE"
+    },
+    "underlying_application_review_kind": {
+      "const": "ENTRY_GATE_REBASE"
+    },
+    "underlying_review_target": {
+      "const": "R02A1_DELTA"
+    },
+    "current_review_target": {
+      "const": "R02A1_CLOSURE_PATCH"
+    },
+    "current_review_decision_options": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "ACCEPT_R02A1_CLOSURE_PATCH"
+        },
+        {
+          "const": "REVISE_R02A1_CLOSURE_PATCH"
+        },
+        {
+          "const": "REJECT_R02A1_CLOSURE_PATCH"
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "recommended_option": {
+      "const": "PENDING_INDEPENDENT_REVIEW"
+    },
+    "target_signal": {
+      "const": "WP0B_ENTRY_GATE_ACCEPTED"
+    },
+    "target_signal_eligibility": {
+      "const": "NOT_ELIGIBLE_UNTIL_INDEPENDENT_REVIEW_P0_P1_CLEAR"
+    },
+    "target_signal_issued": {
+      "const": false
+    },
+    "implementation_authorized": {
+      "const": false
+    },
+    "implementation_authorization_eligibility": {
+      "const": "NOT_ELIGIBLE_UNTIL_ENTRY_GATE_ACCEPTED"
+    },
+    "automatic_next_authorized": {
+      "const": false
+    },
+    "wp3_task2_runtime_authorized": {
+      "const": false
+    },
+    "wp3_task3_authorized": {
+      "const": false
+    },
+    "wp0b_implementation_authorized": {
+      "const": false
+    },
+    "strategy_v2_integration_authorized": {
+      "const": false
+    },
+    "release_or_deployment_authorized": {
+      "const": false
+    },
+    "decision_request_status": {
+      "const": "PENDING"
+    },
+    "default_without_decision": {
+      "const": "PAUSE"
+    },
+    "post_acceptance_controller_decision_required": {
+      "const": "AUTHORIZE_ONE_BOUNDED_WP0B_IMPLEMENTATION_R01"
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acgps.local/schemas/review-test-applicability.v1.schema.json",
+  "title": "Review Test Applicability V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "authority_gate_id",
+    "test_universe_sha256",
+    "entries_sha256",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "REVIEW_TEST_APPLICABILITY_V1"},
+    "authority_gate_id": {"const": "WS-C-PACKAGING-ARCHITECTURE-GATE-R02"},
+    "test_universe_sha256": {
+      "const": "4bd3c30c0f98e1d58ac7a0eebbdcb65456f2d07afad03f40890baac95c85ffaa"
+    },
+    "entries_sha256": {
+      "const": "fb22dba2a4509ed6e16b561b61657178d9a9f0bff78b9aac1569c26dcae9b4ec"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 443,
+      "maxItems": 443,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test_id", "source", "windows", "linux"],
+        "properties": {
+          "test_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*){2,}$"
+          },
+          "source": {
+            "enum": [
+              "CURRENT_EXECUTABLE_BASELINE",
+              "R01_PLANNED_ADDITION",
+              "R02_PLANNED_ADDITION"
+            ]
+          },
+          "windows": {"enum": ["REQUIRED_RUN", "EXPECTED_SKIP"]},
+          "linux": {"enum": ["REQUIRED_RUN", "EXPECTED_SKIP"]}
+        }
+      }
+    }
+  }
+}

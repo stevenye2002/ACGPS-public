@@ -1,0 +1,25 @@
+schema_version: 1
+packet_id: PACKET-0001
+role: CODER
+project_id: ACGPS
+task_id: TASK-0001
+objective: Strengthen WP1 contract validation
+binding_constraints:
+  - standard library first
+non_goals:
+  - WP2 policy engine
+relevant_paths:
+  - acgps/contracts.py
+interfaces_consumed:
+  - validate_contract
+interfaces_produced:
+  - ContractValidationError
+acceptance_criteria:
+  - invalid runtime records fail closed
+required_skills:
+  - superpowers_tdd
+required_evidence:
+  - python scripts/check.py full
+prohibited_actions:
+  - production release
+return_schema: templates/AGENT_RESULT.yaml

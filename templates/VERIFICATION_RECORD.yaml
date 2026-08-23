@@ -1,0 +1,16 @@
+schema_version: 1
+verification_id: AUTO
+project_id: PROJECT_ID
+task_id: TASK_ID
+baseline_hash: HASH
+checks:
+  - name: focused_tests
+    command: COMMAND
+    exit_code: 0
+    result_summary: exact inspected result
+    output_path: PATH
+requirements_checked: []
+failed_requirements: []
+verified_at_utc: AUTO
+verifier_role: VERIFIER
+recommendation: VERIFIED

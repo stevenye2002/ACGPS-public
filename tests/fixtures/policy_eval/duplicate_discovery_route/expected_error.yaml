@@ -1,0 +1,3 @@
+error_code: POLICY_DUPLICATE_DISCOVERY_ROUTE
+path: config/skill_routing.yaml:primary_discovery.routes[1].route_id
+message: duplicate primary discovery route detected

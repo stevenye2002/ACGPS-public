@@ -1,0 +1,36 @@
+schema_version: 1
+policy_id: global-risk-v1
+default_level: R0
+unknown_trigger_behavior: fail_closed
+levels:
+  R0:
+    description: trivial, non-behavioral change
+    required_gates: [focused_check, lightweight_review]
+  R1:
+    description: normal bounded engineering change
+    required_gates: [spec, tests, independent_review, affected_checks]
+  R2:
+    description: high-impact contract, data, workflow, or core-system change
+    required_gates: [architecture, plan, broad_verification, high_capability_review, rc_evidence]
+  R3:
+    description: critical security, regulated, financial, irreversible, or production change
+    required_gates: [human_approval, risk_analysis, strongest_planner, strongest_reviewer, full_verification, rollback_plan, human_release]
+triggers:
+  ui_ux_change: R1
+  implementation_change: R1
+  report_copy_only: R0
+  public_api: R2
+  schema_or_persistence: R2
+  evidence_or_audit_chain: R2
+  source_package_contract: R2
+  forecast_logic: R3
+  forecast_or_financial_logic: R3
+  signing_or_secret_boundary: R3
+  authentication_or_authorization: R3
+  privacy_or_personal_data: R3
+  production_write: R3
+  irreversible_migration: R3
+  external_payment_or_trade: R3
+  documentation_only: R0
+highest_applicable_level_wins: true
+project_profile_may_lower_risk: false

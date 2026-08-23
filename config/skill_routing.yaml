@@ -1,0 +1,28 @@
+schema_version: 1
+policy_id: skill-routing-v1
+primary_discovery:
+  exclusive: true
+  routes:
+    deep_domain_ambiguity: grill_with_docs
+    new_behavior_or_architecture_without_spec: superpowers_brainstorming
+    clear_low_risk_task: concise_spec
+skills:
+  superpowers_writing_plans:
+    when_any: [multi_step, multi_file, integration, risk_R2, risk_R3]
+  superpowers_tdd:
+    when_any: [bug_fix, behavior_change, public_contract_change]
+  superpowers_systematic_debugging:
+    when_any: [unexpected_failure, failing_test, regression, unclear_runtime_behavior]
+  superpowers_git_worktrees:
+    when_any: [formal_feature, parallel_tasks, isolated_review_work]
+  superpowers_subagent_driven:
+    when_all: [approved_plan, two_or_more_independent_tasks]
+  superpowers_requesting_code_review:
+    when_any: [before_integration, formal_milestone, rc_candidate, risk_R2, risk_R3]
+  superpowers_verification_before_completion:
+    always: true
+  figma_design:
+    when_any: [new_ui, critical_user_flow, responsive_layout, design_system_change, high_fidelity_experience]
+  browser_qa:
+    when_any: [web_ui_change, critical_browser_flow]
+exception_requires_record: true

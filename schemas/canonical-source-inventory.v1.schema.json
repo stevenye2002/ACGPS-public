@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "acgps://schemas/canonical-source-inventory.v1.schema.json",
+  "title": "Canonical Source Inventory v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_commit",
+    "source_tree",
+    "git_object_format",
+    "path_policy_version",
+    "file_count",
+    "files",
+    "inventory_digest"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "git_object_format": {"enum": ["sha1", "sha256"]},
+    "path_policy_version": {"type": "integer", "const": 1},
+    "file_count": {"type": "integer", "minimum": 0},
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "uncompressed_size", "sha256", "git_mode"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "uncompressed_size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "git_mode": {"enum": ["100644", "100755"]}
+        }
+      }
+    },
+    "inventory_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"git_object_format": {"const": "sha1"}}},
+      "then": {
+        "properties": {
+          "source_commit": {"pattern": "^[0-9a-f]{40}$"},
+          "source_tree": {"pattern": "^[0-9a-f]{40}$"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"git_object_format": {"const": "sha256"}}},
+      "then": {
+        "properties": {
+          "source_commit": {"pattern": "^[0-9a-f]{64}$"},
+          "source_tree": {"pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+schema_version: 1
+routing_id: ROUTE-0001
+project_id: ACGPS
+task_id: TASK-0001
+required_skills:
+  - superpowers_tdd
+primary_discovery_route: concise_spec
+model_roles:
+  planner: planner_architect
+  reviewer: task_reviewer
+mandatory_gates:
+  - independent_review
+created_at_utc: "2026-07-20T00:00:00Z"

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACGPS Review Package Comparison v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "comparison_type",
+    "reference_package",
+    "reference_package_sha256",
+    "shadow_package",
+    "shadow_package_sha256",
+    "comparator_commit",
+    "comparator_commit_status",
+    "comparator_blob_id",
+    "reference_verified",
+    "shadow_verified",
+    "source_content_digest_match",
+    "evidence_set_digest_match",
+    "review_profile_digest_match",
+    "bundle_entry_digest_match",
+    "review_identity_projection_match",
+    "canonical_digests_equal",
+    "reference_projection",
+    "shadow_projection"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "comparison_type": {"const": "REFERENCE_SHADOW_REVIEW_PACKAGE_COMPARISON"},
+    "reference_package": {"type": "string"},
+    "reference_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "shadow_package": {"type": "string"},
+    "shadow_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "comparator_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "comparator_commit_status": {"enum": ["RECORDED", "GIT_REPOSITORY_UNAVAILABLE"]},
+    "comparator_blob_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "reference_verified": {"type": "boolean"},
+    "shadow_verified": {"type": "boolean"},
+    "source_content_digest_match": {"type": "boolean"},
+    "evidence_set_digest_match": {"type": "boolean"},
+    "review_profile_digest_match": {"type": "boolean"},
+    "bundle_entry_digest_match": {"type": "boolean"},
+    "review_identity_projection_match": {"type": "boolean"},
+    "canonical_digests_equal": {"type": "boolean"},
+    "reference_projection": {"$ref": "#/$defs/projection"},
+    "shadow_projection": {"$ref": "#/$defs/projection"}
+  },
+  "$defs": {
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_content_digest",
+        "evidence_set_sha256",
+        "review_profile_digest",
+        "package_basename",
+        "package_sha256",
+        "bundle_entry_digest",
+        "review_identity_projection"
+      ],
+      "properties": {
+        "package_basename": {"type": "string"},
+        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bundle_entry_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_content_digest": {"type": ["string", "null"]},
+        "evidence_set_sha256": {"type": ["string", "null"]},
+        "review_profile_digest": {"type": ["string", "null"]},
+        "review_identity_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "round_id",
+            "review_round_id",
+            "review_kind",
+            "work_package",
+            "review_track_id",
+            "expected_success_signal",
+            "profile_id",
+            "request_review_round_id"
+          ],
+          "properties": {
+            "round_id": {"type": ["string", "null"]},
+            "review_round_id": {"type": ["string", "null"]},
+            "review_kind": {"type": ["string", "null"]},
+            "work_package": {"type": ["string", "null"]},
+            "review_track_id": {"type": ["string", "null"]},
+            "expected_success_signal": {"type": ["string", "null"]},
+            "profile_id": {"type": ["string", "null"]},
+            "request_review_round_id": {"type": ["string", "null"]}
+          }
+        }
+      }
+    }
+  }
+}

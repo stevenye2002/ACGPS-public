@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acgps.local/schemas/review-platform-evidence.v1.schema.json",
+  "title": "Review Platform Evidence V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "platform",
+    "environment",
+    "command_argv",
+    "discovered_tests",
+    "passed",
+    "failures",
+    "errors",
+    "skipped",
+    "source_commit",
+    "source_tree",
+    "source_inventory_protocol_version",
+    "inventory_digest",
+    "candidate_sha256",
+    "test_universe_digest",
+    "applicability_manifest_path",
+    "applicability_manifest_sha256",
+    "required_tests",
+    "expected_skip_tests",
+    "log_encoding"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_type": {"const": "REVIEW_PLATFORM_EVIDENCE_V1"},
+    "platform": {"enum": ["windows", "linux"]},
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os_name", "os_version", "python_version", "architecture"],
+      "properties": {
+        "os_name": {"type": "string", "minLength": 1},
+        "os_version": {"type": "string", "minLength": 1},
+        "python_version": {"type": "string", "minLength": 1},
+        "architecture": {"type": "string", "minLength": 1}
+      }
+    },
+    "command_argv": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "python"},
+        {"const": "-m"},
+        {"const": "unittest"},
+        {"const": "discover"},
+        {"const": "-s"},
+        {"const": "tests"},
+        {"const": "-v"}
+      ],
+      "minItems": 7,
+      "maxItems": 7
+    },
+    "discovered_tests": {"$ref": "#/$defs/test_id_array"},
+    "passed": {"$ref": "#/$defs/test_id_array"},
+    "failures": {"$ref": "#/$defs/test_id_array"},
+    "errors": {"$ref": "#/$defs/test_id_array"},
+    "skipped": {"$ref": "#/$defs/test_id_array"},
+    "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "source_tree": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "source_inventory_protocol_version": {"const": 1},
+    "inventory_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "test_universe_digest": {
+      "const": "4bd3c30c0f98e1d58ac7a0eebbdcb65456f2d07afad03f40890baac95c85ffaa"
+    },
+    "applicability_manifest_path": {"const": "config/review_test_applicability.v1.json"},
+    "applicability_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "required_tests": {"$ref": "#/$defs/test_id_array"},
+    "expected_skip_tests": {"$ref": "#/$defs/test_id_array"},
+    "log_encoding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoding", "newline", "bom"],
+      "properties": {
+        "encoding": {"const": "UTF-8"},
+        "newline": {"const": "LF"},
+        "bom": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "test_id_array": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*){2,}$"
+      }
+    }
+  }
+}

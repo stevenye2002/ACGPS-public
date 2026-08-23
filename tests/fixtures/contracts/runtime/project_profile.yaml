@@ -1,0 +1,17 @@
+schema_version: 1
+profile_id: ftic-v1
+project_name: FTIC
+project_type: frontier_technology_intelligence
+required_files:
+  goal: docs/PROJECT_GOAL.md
+  state: docs/PROJECT_STATE.md
+  agents: AGENTS.md
+  active_review: reviews/CURRENT_REVIEW.md
+critical_surfaces:
+  - quality_gate
+risk_overrides:
+  evidence_or_audit_chain: R2
+pilot_restrictions:
+  - no_automatic_release
+commands:
+  focused_test: python -m unittest discover -s tests -v

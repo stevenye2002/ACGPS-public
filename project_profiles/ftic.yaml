@@ -1,0 +1,33 @@
+schema_version: 1
+profile_id: ftic-v1
+project_name: FTIC
+project_type: frontier_technology_intelligence
+required_files:
+  goal: docs/FTIC_PROJECT_REPLAN.md
+  state: docs/PROJECT_STATE.md
+  agents: AGENTS.md
+  active_review: reviews/CURRENT_REVIEW.md
+critical_surfaces:
+  - quality_gate
+  - evidence_lifecycle
+  - forecast_registry
+  - scanner_signing
+  - fic_feed_contract
+  - source_package_security
+risk_overrides:
+  forecast_logic: R3
+  evidence_or_audit_chain: R2
+  signing_or_secret_boundary: R3
+  source_package_contract: R2
+  report_copy_only: R1
+pilot_restrictions:
+  - no_production_intelligence_change
+  - no_historical_forecast_or_evidence_mutation
+  - no_broad_core_refactor
+  - no_automatic_release
+commands:
+  focused_test: python -m pytest <relevant_test_path>
+  full_test: python -m pytest -q
+  lint: python -m ruff check <relevant_path>
+  typecheck: python -m mypy <relevant_path>
+  source_package: python -m ftic source-package build --output-dir dist

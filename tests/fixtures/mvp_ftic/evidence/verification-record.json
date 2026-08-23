@@ -1,0 +1,21 @@
+{
+  "baseline_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "checks": [
+    {
+      "command": "python -m unittest tests.test_mvp_cli",
+      "exit_code": 0,
+      "name": "focused",
+      "output_path": "evidence/focused.txt",
+      "result_summary": "pass"
+    }
+  ],
+  "failed_requirements": [],
+  "project_id": "FTIC",
+  "recommendation": "VERIFIED",
+  "requirements_checked": ["bounded governance flow"],
+  "schema_version": 1,
+  "task_id": "ftic-governance-1",
+  "verification_id": "verification-1",
+  "verified_at_utc": "2026-08-23T00:03:00Z",
+  "verifier_role": "VERIFIER"
+}

@@ -1,0 +1,9 @@
+schema_version: 99
+levels:
+  R0: {}
+  R1: {}
+  R2: {}
+  R3: {}
+triggers: {}
+default_level: R0
+unknown_trigger_behavior: fail_closed

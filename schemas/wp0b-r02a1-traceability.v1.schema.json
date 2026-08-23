@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "acgps://schemas/wp0b-r02a1-traceability.v1.schema.json",
+  "title": "WP0B R02A1 Traceability Matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "matrix_id",
+    "work_package_id",
+    "scope",
+    "implementation_authorized",
+    "matrix_content_sha256",
+    "criteria"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 6
+    },
+    "matrix_id": {
+      "const": "WP0B_R02A1_CLOSURE_TRACEABILITY_MATRIX_20260731"
+    },
+    "work_package_id": {
+      "const": "WP0B"
+    },
+    "scope": {
+      "const": "pre-implementation acceptance-to-test mapping"
+    },
+    "implementation_authorized": {
+      "const": false
+    },
+    "matrix_content_sha256": {
+      "const": "9946d1ac6daa8211622823a814aeab838e3a07d862b54dffdb7908985d2089e3"
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "criterion",
+          "task",
+          "tests"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-WP0B-[0-9]{3}$"
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "task": {
+            "type": "string",
+            "pattern": "^Task [0-9]+[A-Z]?$"
+          },
+          "tests": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

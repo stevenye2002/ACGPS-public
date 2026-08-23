@@ -1,0 +1,16 @@
+schema_version: 1
+packet_id: AUTO
+role: PLANNER
+project_id: PROJECT_ID
+task_id: TASK_ID
+objective: one bounded objective
+binding_constraints: []
+non_goals: []
+relevant_paths: []
+interfaces_consumed: []
+interfaces_produced: []
+acceptance_criteria: []
+required_skills: []
+required_evidence: []
+prohibited_actions: []
+return_schema: templates/AGENT_RESULT.yaml

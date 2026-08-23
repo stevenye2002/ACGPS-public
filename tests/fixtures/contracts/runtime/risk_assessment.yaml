@@ -1,0 +1,11 @@
+schema_version: 1
+assessment_id: RISK-0001
+project_id: ACGPS
+task_id: TASK-0001
+risk_level: R2
+matched_triggers:
+  - schema_or_persistence
+required_gates:
+  - broad_verification
+model_recommendation: null
+created_at_utc: "2026-07-20T00:00:00Z"

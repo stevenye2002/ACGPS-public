@@ -1,0 +1,8 @@
+schema_version: 1
+skills: {}
+primary_discovery:
+  routes:
+    - route_id: new_ui
+      target: figma_design
+    - route_id: new_ui
+      target: browser_qa

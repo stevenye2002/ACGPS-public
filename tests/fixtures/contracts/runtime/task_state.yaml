@@ -1,0 +1,8 @@
+schema_version: 1
+task_id: TASK-0001
+project_id: ACGPS
+state: PLAN_READY
+updated_at_utc: "2026-07-20T00:00:00Z"
+evidence:
+  - reviews/responses/ACGPS_WP1_REVIEW_RESPONSE_PLAN_20260720.md
+pending_decision_id: null

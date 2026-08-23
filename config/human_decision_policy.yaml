@@ -1,0 +1,20 @@
+schema_version: 1
+policy_id: human-decision-v1
+default_without_response: PAUSE
+triggers:
+  H1_PRODUCT_INTENT:
+    examples: [conflicting_target_users, materially_different_product_meaning, undefined_success_metric]
+  H2_IRREVERSIBLE_OR_COSTLY:
+    examples: [destructive_migration, permanent_contract_break, major_vendor_lock_in, substantial_new_cost]
+  H3_RISK_ACCEPTANCE:
+    examples: [known_security_risk, privacy_risk, legal_uncertainty, financial_or_medical_risk]
+  H4_NORMATIVE_EXPERIENCE:
+    examples: [brand_direction, creative_tradeoff, commercial_vs_artistic, non_mechanical_ux_choice]
+  H5_EXTERNAL_ACTION:
+    examples: [production_deploy, public_publish, real_email, payment, trade, production_data_change]
+do_not_escalate:
+  - answer_available_in_repository
+  - reversible_internal_choice
+  - approved_plan_already_decides
+  - validation_tool_can_decide
+  - objective_review_defect

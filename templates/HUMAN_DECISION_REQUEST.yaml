@@ -1,0 +1,21 @@
+schema_version: 1
+decision_id: AUTO
+project_id: PROJECT_ID
+task_id: TASK_ID
+stage: STAGE
+risk_level: R2
+trigger: H1_PRODUCT_INTENT
+question: one precise decision question
+recommended_option: OPTION_ID
+recommendation_rationale: concise evidence-based rationale
+options:
+  - id: OPTION_ID
+    description: concrete choice
+    benefits: []
+    costs: []
+    risks: []
+    reversible: true
+default_without_response: PAUSE
+evidence_paths: []
+created_at_utc: AUTO
+status: PENDING

@@ -1,0 +1,13 @@
+schema_version: 1
+packet_id: PACKET_ID
+role: CODER
+status: DONE
+summary: concise outcome
+changed_files: []
+created_files: []
+commands_run: []
+evidence_paths: []
+assumptions: []
+concerns: []
+blocker: null
+recommended_next_state: TASK_REVIEW

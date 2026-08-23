@@ -1,0 +1,3 @@
+error_code: POLICY_PROFILE_REQUIRED_FILE_INVALID
+path: project_profiles/unsafe-required-file.yaml:required_files.escape
+message: profile required_files entry is unsafe or missing

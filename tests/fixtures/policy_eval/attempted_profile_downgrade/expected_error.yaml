@@ -1,0 +1,3 @@
+error_code: POLICY_PROFILE_DOWNGRADE_FORBIDDEN
+path: project_profiles/ftic.yaml:risk_overrides.evidence_or_audit_chain
+message: project profile may not lower global risk level

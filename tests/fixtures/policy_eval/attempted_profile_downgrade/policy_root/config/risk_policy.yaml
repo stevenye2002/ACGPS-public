@@ -1,0 +1,11 @@
+schema_version: 1
+levels:
+  R0: {}
+  R1: {}
+  R2: {}
+  R3: {}
+triggers:
+  evidence_or_audit_chain: R2
+default_level: R0
+unknown_trigger_behavior: fail_closed
+project_profile_may_lower_risk: false

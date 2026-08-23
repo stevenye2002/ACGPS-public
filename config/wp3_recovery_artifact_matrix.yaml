@@ -1,0 +1,137 @@
+schema_version: 1
+matrix_id: WP3_RECOVERY_ARTIFACT_APPLICABILITY.v1
+artifact_fields:
+  quarantine:
+    transaction_field: planned_quarantine_manifest
+    planned_hash_key: quarantine
+    recovery_record_hash_field: quarantine_manifest_sha256
+    on_disk_artifact_key: quarantine
+  generation_event:
+    transaction_field: planned_generation_event
+    planned_hash_key: generation_event
+    recovery_record_hash_field: generation_event_sha256
+    on_disk_artifact_key: generation_event
+  state:
+    transaction_field: planned_state
+    planned_hash_key: state
+    recovery_record_hash_field: state_sha256
+    on_disk_artifact_key: state
+  idempotency_record:
+    transaction_field: planned_idempotency_record
+    planned_hash_key: idempotency_record
+    recovery_record_hash_field: null
+    on_disk_artifact_key: idempotency_record
+applicability_values:
+  - REQUIRED
+  - OPTIONAL
+  - FORBIDDEN
+applicability_roles:
+  REQUIRED: required
+  OPTIONAL: optional
+  FORBIDDEN: forbidden
+phase_states:
+  not_written:
+    phase_recorded: false
+    on_disk_present: false
+    on_disk_matches_planned: null
+    description: "The artifact has not been written and no matching stale artifact is present."
+  stale_matching:
+    phase_recorded: false
+    on_disk_present: true
+    on_disk_matches_planned: true
+    description: "The artifact exists before its phase record and matches the planned hash; recovery reconciles it without minting a second artifact identity."
+  written:
+    phase_recorded: true
+    on_disk_present: true
+    on_disk_matches_planned: true
+    description: "The artifact write phase is recorded and the durable artifact hash must equal the planned hash."
+  conflicting:
+    phase_recorded: false
+    on_disk_present: true
+    on_disk_matches_planned: false
+    description: "The artifact exists before its phase record but conflicts with the planned hash; recovery fails closed."
+rules:
+  - recovery_action: replay
+    result_status: accepted
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: REQUIRED
+  - recovery_action: quarantine_and_start_generation
+    result_status: accepted
+    artifacts:
+      quarantine: REQUIRED
+      generation_event: REQUIRED
+      state: REQUIRED
+      idempotency_record: REQUIRED
+  - recovery_action: rollback_to_valid_prefix
+    result_status: accepted
+    artifacts:
+      quarantine: REQUIRED
+      generation_event: REQUIRED
+      state: REQUIRED
+      idempotency_record: REQUIRED
+  - recovery_action: classify_threat_model_limit
+    result_status: accepted
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: REQUIRED
+  - recovery_action: replay
+    result_status: fail_closed
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: quarantine_and_start_generation
+    result_status: fail_closed
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: rollback_to_valid_prefix
+    result_status: fail_closed
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: classify_threat_model_limit
+    result_status: fail_closed
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: replay
+    result_status: diagnostic_only
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: quarantine_and_start_generation
+    result_status: diagnostic_only
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: rollback_to_valid_prefix
+    result_status: diagnostic_only
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN
+  - recovery_action: classify_threat_model_limit
+    result_status: diagnostic_only
+    artifacts:
+      quarantine: FORBIDDEN
+      generation_event: FORBIDDEN
+      state: FORBIDDEN
+      idempotency_record: FORBIDDEN

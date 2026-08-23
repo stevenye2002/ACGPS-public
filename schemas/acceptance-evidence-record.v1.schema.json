@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acgps.local/schemas/acceptance-evidence-record.v1.schema.json",
+  "title": "AcceptanceEvidenceRecordV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id", "criterion_or_finding_id", "severity", "frozen_requirement", "status", "result",
+    "behavioral_assertions", "actual_tests", "changed_files", "evidence_paths", "uncovered_assertions",
+    "platform_limits", "source_commit", "inventory_digest", "submitter_provenance",
+    "independent_review_authority", "controller_authority", "authority_chain_digest"
+  ],
+  "properties": {
+    "record_id": {"type": "string", "minLength": 1},
+    "criterion_or_finding_id": {"type": "string", "minLength": 1},
+    "severity": {"enum": ["P0", "P1", "P2", "P3"]},
+    "frozen_requirement": {"type": "string", "minLength": 1},
+    "status": {"enum": ["OPEN", "PARTIALLY_REMEDIATED", "REMEDIATED_PENDING_EXTERNAL_VERIFICATION", "VERIFIED", "CLOSED"]},
+    "result": {"enum": ["PASS_IN_CURRENT_EVIDENCE", "PARTIAL_REQUIRES_FOLLOW_UP", "FAILED"]},
+    "behavioral_assertions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assertion_id", "statement", "supporting_tests"],
+        "properties": {
+          "assertion_id": {"type": "string", "minLength": 1},
+          "statement": {"type": "string", "minLength": 1},
+          "supporting_tests": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "actual_tests": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "changed_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "evidence_paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "uncovered_assertions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "platform_limits": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "inventory_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "submitter_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_role", "source_commit", "evidence_digest"],
+      "properties": {
+        "actor_role": {"enum": ["SOL_LEAD", "TERRA_WORKER"]},
+        "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "evidence_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "independent_review_authority": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["review_id", "reviewer_role", "reviewed_commit", "reviewed_evidence_digest", "target_eligibility"],
+          "properties": {
+            "review_id": {"type": "string", "minLength": 1},
+            "reviewer_role": {"const": "FRESH_SOL_REVIEWER"},
+            "reviewed_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+            "reviewed_evidence_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "target_eligibility": {"const": "ELIGIBLE"}
+          }
+        }
+      ]
+    },
+    "controller_authority": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["decision_id", "decision_record_sha256", "authorized_transition", "issued_signal"],
+          "properties": {
+            "decision_id": {"type": "string", "minLength": 1},
+            "decision_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "authorized_transition": {"const": "VERIFIED_TO_CLOSED"},
+            "issued_signal": {"const": "ACCEPTANCE_CLOSED"}
+          }
+        }
+      ]
+    },
+    "authority_chain_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

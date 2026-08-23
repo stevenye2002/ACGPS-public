@@ -1,0 +1,11 @@
+schema_version: 1
+decision_id: HDR-0001
+project_id: PROJECT_ID
+task_id: TASK_ID
+selected_option: OPTION_ID
+resolved_by: human_owner
+resolved_at_utc: AUTO
+rationale: concise owner decision rationale
+evidence_paths: []
+resume_state: PLAN_READY
+status: RESOLVED

@@ -1,0 +1,10 @@
+schema_version: 1
+profile_id: ftic-v1
+project_name: FTIC duplicate
+project_type: frontier_technology_intelligence
+required_files:
+  goal: docs/PROJECT_GOAL.md
+critical_surfaces: []
+risk_overrides: {}
+pilot_restrictions: []
+commands: {}

@@ -1,0 +1,11 @@
+schema_version: 1
+event_id: AUDIT-0001
+project_id: ACGPS
+task_id: TASK-0001
+event_type: CONTRACT_VALIDATED
+actor: verifier
+created_at_utc: "2026-07-20T00:30:00Z"
+evidence_paths:
+  - artifacts/verification/focused-tests.txt
+details:
+  contract: task_intake

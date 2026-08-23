@@ -1,0 +1,3 @@
+error_code: POLICY_FILE_MISSING
+path: config/risk_policy.yaml
+message: required policy file is missing

@@ -1,0 +1,17 @@
+schema_version: 1
+levels:
+  R0: {}
+  R1: {}
+  R2: {}
+  R3: {}
+triggers:
+  schema_or_persistence: R2
+default_level: R0
+unknown_trigger_behavior: fail_closed
+rules:
+  - trigger: schema_or_persistence
+    priority: 100
+    risk_level: R2
+  - trigger: schema_or_persistence
+    priority: 100
+    risk_level: R1

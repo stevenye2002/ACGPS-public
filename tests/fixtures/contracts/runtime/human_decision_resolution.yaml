@@ -1,0 +1,12 @@
+schema_version: 1
+decision_id: HDR-0001
+project_id: ACGPS
+task_id: TASK-0001
+selected_option: pause
+resolved_by: human_owner
+resolved_at_utc: "2026-07-20T00:10:00Z"
+rationale: Pause WP2 until WP1 review findings close.
+evidence_paths:
+  - reviews/responses/ACGPS_WP1_REVIEW_RESPONSE_PLAN_20260720.md
+resume_state: PLAN_READY
+status: RESOLVED

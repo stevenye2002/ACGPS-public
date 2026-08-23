@@ -1,0 +1,22 @@
+schema_version: 1
+task_id: ftic-governance-1
+project_id: FTIC
+title: Exercise the bounded FTIC governance workflow
+requested_outcome: Produce a reviewable governance-only release candidate.
+business_context: First ACGPS dogfood task without FTIC domain changes.
+in_scope:
+  - governance workflow evidence
+out_of_scope:
+  - FTIC production intelligence changes
+acceptance_criteria:
+  - independent review evidence is closed
+  - verification evidence is green
+known_constraints:
+  - managed FTIC root is read-only
+known_risks: []
+affected_surfaces:
+  - report_copy_only
+source_paths:
+  - docs/FTIC_PROJECT_REPLAN.md
+requested_by: human_owner
+created_at_utc: '2026-08-23T00:00:00Z'

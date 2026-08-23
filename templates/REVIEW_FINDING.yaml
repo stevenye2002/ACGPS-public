@@ -1,0 +1,13 @@
+schema_version: 1
+finding_id: AUTO
+review_id: REVIEW_ID
+severity: P1
+category: correctness
+summary: concise finding
+evidence_paths: []
+impact: observable consequence
+recommendation: concrete action
+disposition: UNTRIAGED
+status: OPEN
+rationale: null
+verification_required: []

@@ -1,0 +1,686 @@
+schema_version: 1
+case_set_id: acgps-v0.1-policy-eval
+created_at_utc: "2026-07-23T03:45:00Z"
+case_schema: PolicyEvaluationCase.v1
+required_categories:
+  - positive
+  - human_gate
+  - ui_route
+  - production_boundary
+  - unknown_id
+  - actual_raise
+  - replay
+  - malformed
+  - duplicate_discovery
+  - unknown_version
+  - attempted_downgrade
+  - conflict
+  - missing_policy
+  - duplicate_yaml_key
+  - duplicate_profile_id
+  - unsafe_profile_required_file
+  - order_perturbation
+  - type_confusion
+metrics:
+  false_escalation_rate_max: 0.10
+  missed_escalation_rate_max: 0.00
+  unauthorized_transition_rate_max: 0.00
+  duplicate_discovery_route_rate_max: 0.00
+  resume_success_rate_min: 1.00
+cases:
+  - case_id: TEST-POLICY-001
+    category: positive
+    summary: Register local profile without external action.
+    input:
+      current_state: DRAFT
+      risk_triggers: []
+      human_triggers: []
+      task_attributes:
+        change_type: profile_validation
+      project_profile_id: ftic-v1
+    expected:
+      decision_emitted: true
+      risk_level: R0
+      human_gate: false
+      required_human_triggers: []
+      required_skills:
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+      mandatory_gates:
+        - focused_check
+        - lightweight_review
+      legal_transitions:
+        - READY_FOR_CLASSIFICATION
+        - ABANDONED
+      authorized_transitions:
+        - READY_FOR_CLASSIFICATION
+        - ABANDONED
+      provenance:
+        - config/risk_policy.yaml:default_level
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/workflow_policy.yaml:transitions.DRAFT
+      fail_closed: false
+      error_code: null
+      issues: []
+
+  - case_id: TEST-POLICY-002
+    category: human_gate
+    summary: Irreversible architecture decision requires human-only transition authorization.
+    input:
+      current_state: CLASSIFIED
+      risk_triggers:
+        - schema_or_persistence
+      human_triggers:
+        - H2_IRREVERSIBLE_OR_COSTLY
+      task_attributes:
+        change_type: architecture_decision
+      project_profile_id: null
+    expected:
+      decision_emitted: true
+      risk_level: R2
+      human_gate: true
+      required_human_triggers:
+        - H2_IRREVERSIBLE_OR_COSTLY
+      required_skills:
+        - superpowers_writing_plans
+        - superpowers_requesting_code_review
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+        reviewer: task_reviewer
+        verifier: verifier
+      mandatory_gates:
+        - architecture
+        - plan
+        - broad_verification
+        - high_capability_review
+        - rc_evidence
+      legal_transitions:
+        - SPEC_READY
+        - WAITING_HUMAN
+        - ABANDONED
+      authorized_transitions:
+        - WAITING_HUMAN
+        - ABANDONED
+      provenance:
+        - config/risk_policy.yaml:triggers.schema_or_persistence
+        - config/human_decision_policy.yaml:triggers.H2_IRREVERSIBLE_OR_COSTLY
+        - config/skill_routing.yaml:skills.superpowers_writing_plans
+        - config/skill_routing.yaml:skills.superpowers_requesting_code_review
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/model_routing.yaml:roles.task_reviewer
+        - config/model_routing.yaml:roles.verifier
+        - config/workflow_policy.yaml:transitions.CLASSIFIED
+      fail_closed: false
+      error_code: null
+      issues: []
+
+  - case_id: TEST-POLICY-003
+    category: ui_route
+    summary: UI task selects Figma route without duplicate discovery.
+    input:
+      current_state: SPEC_READY
+      risk_triggers:
+        - ui_ux_change
+      human_triggers: []
+      task_attributes:
+        change_type: ui_design
+        surface: figma_required
+      project_profile_id: null
+    expected:
+      decision_emitted: true
+      risk_level: R1
+      human_gate: false
+      required_human_triggers: []
+      required_skills:
+        - figma_design
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+        reviewer: task_reviewer
+      mandatory_gates:
+        - spec
+        - tests
+        - independent_review
+        - affected_checks
+      legal_transitions:
+        - PLAN_READY
+        - WAITING_HUMAN
+        - ABANDONED
+      authorized_transitions:
+        - PLAN_READY
+        - WAITING_HUMAN
+        - ABANDONED
+      provenance:
+        - config/risk_policy.yaml:triggers.ui_ux_change
+        - config/skill_routing.yaml:skills.figma_design
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/model_routing.yaml:roles.task_reviewer
+        - config/workflow_policy.yaml:transitions.SPEC_READY
+      fail_closed: false
+      error_code: null
+      issues: []
+
+  - case_id: TEST-POLICY-004
+    category: production_boundary
+    summary: Production release request routes only to human-owned release states.
+    input:
+      current_state: VERIFIED
+      risk_triggers:
+        - production_write
+      human_triggers:
+        - H5_EXTERNAL_ACTION
+      task_attributes:
+        change_type: release_request
+      project_profile_id: null
+    expected:
+      decision_emitted: true
+      risk_level: R3
+      human_gate: true
+      required_human_triggers:
+        - H5_EXTERNAL_ACTION
+      required_skills:
+        - superpowers_writing_plans
+        - superpowers_requesting_code_review
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+        reviewer: final_reviewer
+        verifier: verifier
+      mandatory_gates:
+        - human_approval
+        - risk_analysis
+        - strongest_planner
+        - strongest_reviewer
+        - full_verification
+        - rollback_plan
+        - human_release
+      legal_transitions:
+        - RC_READY
+        - CLOSED
+        - WAITING_HUMAN
+      authorized_transitions:
+        - WAITING_HUMAN
+      provenance:
+        - config/risk_policy.yaml:triggers.production_write
+        - config/human_decision_policy.yaml:triggers.H5_EXTERNAL_ACTION
+        - config/skill_routing.yaml:skills.superpowers_writing_plans
+        - config/skill_routing.yaml:skills.superpowers_requesting_code_review
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/model_routing.yaml:roles.final_reviewer
+        - config/model_routing.yaml:roles.verifier
+        - config/workflow_policy.yaml:transitions.VERIFIED
+      fail_closed: false
+      error_code: null
+      issues: []
+
+  - case_id: TEST-POLICY-005
+    category: unknown_id
+    summary: Unknown risk trigger must fail closed without partial decision output.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers:
+        - unknown_policy_trigger
+      human_triggers: []
+      task_attributes:
+        change_type: malformed_policy
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_UNKNOWN_ID
+      issues:
+        - code: POLICY_UNKNOWN_ID
+          path: input.risk_triggers[0]
+          message: unknown risk trigger unknown_policy_trigger
+
+  - case_id: TEST-POLICY-006
+    category: actual_raise
+    summary: FTIC profile raises report-copy-only work above the global default.
+    input:
+      current_state: CLASSIFIED
+      risk_triggers:
+        - report_copy_only
+      human_triggers: []
+      task_attributes:
+        change_type: ftic_report_copy
+      project_profile_id: ftic-v1
+    expected:
+      decision_emitted: true
+      risk_level: R1
+      human_gate: false
+      required_human_triggers: []
+      required_skills:
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+        reviewer: task_reviewer
+      mandatory_gates:
+        - spec
+        - tests
+        - independent_review
+        - affected_checks
+      legal_transitions:
+        - SPEC_READY
+        - WAITING_HUMAN
+        - ABANDONED
+      authorized_transitions:
+        - SPEC_READY
+        - WAITING_HUMAN
+        - ABANDONED
+      provenance:
+        - config/risk_policy.yaml:triggers.report_copy_only
+        - project_profiles/ftic.yaml:risk_overrides.report_copy_only
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/model_routing.yaml:roles.task_reviewer
+        - config/workflow_policy.yaml:transitions.CLASSIFIED
+      fail_closed: false
+      error_code: null
+      issues: []
+
+  - case_id: TEST-POLICY-007
+    category: replay
+    summary: Same input must produce deterministic replay output.
+    input:
+      current_state: TASK_REVIEW
+      risk_triggers:
+        - evidence_or_audit_chain
+      human_triggers: []
+      task_attributes:
+        change_type: review_artifact
+      project_profile_id: ftic-v1
+    expected:
+      decision_emitted: true
+      risk_level: R2
+      human_gate: false
+      required_human_triggers: []
+      required_skills:
+        - superpowers_writing_plans
+        - superpowers_requesting_code_review
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+        reviewer: task_reviewer
+        verifier: verifier
+      mandatory_gates:
+        - architecture
+        - plan
+        - broad_verification
+        - high_capability_review
+        - rc_evidence
+      legal_transitions:
+        - FIX_REQUIRED
+        - INTEGRATING
+        - WAITING_HUMAN
+      authorized_transitions:
+        - FIX_REQUIRED
+        - INTEGRATING
+        - WAITING_HUMAN
+      provenance:
+        - config/risk_policy.yaml:triggers.evidence_or_audit_chain
+        - project_profiles/ftic.yaml:risk_overrides.evidence_or_audit_chain
+        - config/skill_routing.yaml:skills.superpowers_writing_plans
+        - config/skill_routing.yaml:skills.superpowers_requesting_code_review
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/model_routing.yaml:roles.task_reviewer
+        - config/model_routing.yaml:roles.verifier
+        - config/workflow_policy.yaml:transitions.TASK_REVIEW
+      fail_closed: false
+      error_code: null
+      issues: []
+      replay_deterministic: true
+
+  - case_id: TEST-POLICY-008
+    category: malformed
+    fixture_id: malformed_yaml
+    summary: Malformed policy file discovery fails closed before decision output.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers: []
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_MALFORMED
+      issues:
+        - code: POLICY_MALFORMED
+          path: config/risk_policy.yaml
+          message: policy fixture cannot be parsed
+
+  - case_id: TEST-POLICY-009
+    category: duplicate_discovery
+    fixture_id: duplicate_discovery_route
+    summary: Duplicate skill discovery routes fail closed instead of choosing both routes.
+    input:
+      current_state: SPEC_READY
+      risk_triggers:
+        - ui_ux_change
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_DUPLICATE_DISCOVERY_ROUTE
+      issues:
+        - code: POLICY_DUPLICATE_DISCOVERY_ROUTE
+          path: config/skill_routing.yaml:primary_discovery.routes[1].route_id
+          message: duplicate primary discovery route detected
+
+  - case_id: TEST-POLICY-010
+    category: unknown_version
+    fixture_id: unknown_schema_version
+    summary: Unknown policy schema version fails closed with stable error.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers: []
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_UNSUPPORTED_VERSION
+      issues:
+        - code: POLICY_UNSUPPORTED_VERSION
+          path: config/risk_policy.yaml:schema_version
+          message: unsupported policy schema version
+
+  - case_id: TEST-POLICY-011
+    category: attempted_downgrade
+    fixture_id: attempted_profile_downgrade
+    summary: Project profile attempts to lower a global R2 trigger and must be rejected.
+    input:
+      current_state: CLASSIFIED
+      risk_triggers:
+        - evidence_or_audit_chain
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: ftic-v1
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_PROFILE_DOWNGRADE_FORBIDDEN
+      issues:
+        - code: POLICY_PROFILE_DOWNGRADE_FORBIDDEN
+          path: project_profiles/ftic.yaml:risk_overrides.evidence_or_audit_chain
+          message: project profile may not lower global risk level
+
+  - case_id: TEST-POLICY-012
+    category: conflict
+    fixture_id: conflicting_equal_priority_rules
+    summary: Equal-priority policy conflict fails closed with issue provenance.
+    input:
+      current_state: CLASSIFIED
+      risk_triggers:
+        - schema_or_persistence
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_CONFLICT
+      issues:
+        - code: POLICY_CONFLICT
+          path: config/risk_policy.yaml:rules[1]
+          message: conflicting equal-priority policy rules
+
+  - case_id: TEST-POLICY-013
+    category: missing_policy
+    fixture_id: missing_policy_file
+    summary: Missing policy file fails closed with no decision output.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers: []
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_FILE_MISSING
+      issues:
+        - code: POLICY_FILE_MISSING
+          path: config/risk_policy.yaml
+          message: required policy file is missing
+
+  - case_id: TEST-POLICY-014
+    category: duplicate_yaml_key
+    fixture_id: duplicate_yaml_key
+    summary: Duplicate YAML mapping keys fail closed with a registered stable error.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers: []
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_DUPLICATE_YAML_KEY
+      issues:
+        - code: POLICY_DUPLICATE_YAML_KEY
+          path: config/risk_policy.yaml:schema_version
+          message: duplicate YAML key detected
+
+  - case_id: TEST-POLICY-015
+    category: duplicate_profile_id
+    fixture_id: duplicate_profile_id
+    summary: Duplicate discovered project profile IDs fail closed.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers: []
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_DUPLICATE_PROFILE_ID
+      issues:
+        - code: POLICY_DUPLICATE_PROFILE_ID
+          path: project_profiles/ftic.yaml:profile_id
+          message: duplicate profile_id detected
+
+  - case_id: TEST-POLICY-016
+    category: unsafe_profile_required_file
+    fixture_id: unsafe_profile_required_file
+    summary: Unsafe project profile required_files path fails closed.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers: []
+      human_triggers: []
+      task_attributes: {}
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_PROFILE_REQUIRED_FILE_INVALID
+      issues:
+        - code: POLICY_PROFILE_REQUIRED_FILE_INVALID
+          path: project_profiles/unsafe-required-file.yaml:required_files.escape
+          message: profile required_files entry is unsafe or missing
+
+  - case_id: TEST-POLICY-017
+    category: order_perturbation
+    summary: Risk trigger order does not change the final result.
+    input:
+      current_state: TASK_REVIEW
+      risk_triggers:
+        - report_copy_only
+        - evidence_or_audit_chain
+      human_triggers: []
+      task_attributes:
+        change_type: review_artifact
+      project_profile_id: ftic-v1
+    expected:
+      decision_emitted: true
+      risk_level: R2
+      human_gate: false
+      required_human_triggers: []
+      required_skills:
+        - superpowers_writing_plans
+        - superpowers_requesting_code_review
+        - superpowers_verification_before_completion
+      model_roles:
+        planner: planner_architect
+        reviewer: task_reviewer
+        verifier: verifier
+      mandatory_gates:
+        - architecture
+        - plan
+        - broad_verification
+        - high_capability_review
+        - rc_evidence
+      legal_transitions:
+        - FIX_REQUIRED
+        - INTEGRATING
+        - WAITING_HUMAN
+      authorized_transitions:
+        - FIX_REQUIRED
+        - INTEGRATING
+        - WAITING_HUMAN
+      provenance:
+        - config/risk_policy.yaml:triggers.report_copy_only
+        - project_profiles/ftic.yaml:risk_overrides.report_copy_only
+        - config/risk_policy.yaml:triggers.evidence_or_audit_chain
+        - project_profiles/ftic.yaml:risk_overrides.evidence_or_audit_chain
+        - config/skill_routing.yaml:skills.superpowers_writing_plans
+        - config/skill_routing.yaml:skills.superpowers_requesting_code_review
+        - config/skill_routing.yaml:skills.superpowers_verification_before_completion
+        - config/model_routing.yaml:roles.planner_architect
+        - config/model_routing.yaml:roles.task_reviewer
+        - config/model_routing.yaml:roles.verifier
+        - config/workflow_policy.yaml:transitions.TASK_REVIEW
+      fail_closed: false
+      error_code: null
+      issues: []
+
+  - case_id: TEST-POLICY-018
+    category: type_confusion
+    summary: Non-string policy trigger fails closed with a stable issue path.
+    input:
+      current_state: READY_FOR_CLASSIFICATION
+      risk_triggers:
+        - 123
+      human_triggers: []
+      task_attributes:
+        change_type: type_confusion
+      project_profile_id: null
+    expected:
+      decision_emitted: false
+      risk_level: R3
+      human_gate: true
+      required_human_triggers: []
+      required_skills: []
+      model_roles: {}
+      mandatory_gates: []
+      legal_transitions: []
+      authorized_transitions: []
+      provenance: []
+      fail_closed: true
+      error_code: POLICY_TYPE_ERROR
+      issues:
+        - code: POLICY_TYPE_ERROR
+          path: input.risk_triggers[0]
+          message: risk_trigger must be a string

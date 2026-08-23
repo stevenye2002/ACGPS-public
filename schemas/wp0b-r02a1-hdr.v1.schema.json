@@ -1,0 +1,504 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "acgps://schemas/wp0b-r02a1-hdr.v1.schema.json",
+  "title": "WP0B R02A1 Human Decision Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_id",
+    "application_family_id",
+    "application_id",
+    "submission_id",
+    "package_revision",
+    "supersedes_submission_id",
+    "submission_artifact_name",
+    "work_package_id",
+    "project_id",
+    "task_id",
+    "stage",
+    "control_state_ref",
+    "decision_subject_binding_required",
+    "risk_level",
+    "trigger",
+    "question",
+    "recommended_option",
+    "recommendation_rationale",
+    "options",
+    "default_without_response",
+    "future_controller_decision_required_after_acceptance",
+    "forbidden_implicit_authorization",
+    "evidence_paths",
+    "created_at_utc",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "decision_id": {
+      "const": "HDR-ACGPS-REVIEW-PACKAGE-BUILDER-R02-AUTHORIZATION-R01-20260731T151854Z"
+    },
+    "application_family_id": {
+      "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE"
+    },
+    "application_id": {
+      "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE-20260731"
+    },
+    "submission_id": {
+      "const": "ACGPS-WP0B-R02A1-CIP-20260731T151854Z"
+    },
+    "package_revision": {
+      "const": 8
+    },
+    "supersedes_submission_id": {
+      "const": "ACGPS-WP0B-R02A1-CIP-20260731T142539Z"
+    },
+    "submission_artifact_name": {
+      "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE-20260731T151854Z.zip"
+    },
+    "work_package_id": {
+      "const": "WP0B"
+    },
+    "project_id": {
+      "const": "ACGPS"
+    },
+    "task_id": {
+      "const": "WP0B-REVIEW-PACKAGE-BUILDER"
+    },
+    "stage": {
+      "const": "R02A1_CLOSURE_PATCH_REVIEW"
+    },
+    "control_state_ref": {
+      "const": "reviews/requests/WP0B_R02A1_CONTROL_STATE.json"
+    },
+    "decision_subject_binding_required": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "submission_id",
+        "zip_filename",
+        "zip_sha256",
+        "note"
+      ],
+      "properties": {
+        "submission_id": {
+          "const": "ACGPS-WP0B-R02A1-CIP-20260731T151854Z"
+        },
+        "zip_filename": {
+          "const": "ACGPS-WP0B-R02A1-CLOSURE-IN-PLACE-20260731T151854Z.zip"
+        },
+        "zip_sha256": {
+          "const": "MUST_MATCH_DETACHED_SHA256_AFTER_PACKAGE_PUBLICATION"
+        },
+        "note": {
+          "const": "The final ZIP SHA cannot be self-contained inside the ZIP; Controller/Human acceptance must bind the detached SHA-256 value."
+        }
+      }
+    },
+    "risk_level": {
+      "const": "R2"
+    },
+    "trigger": {
+      "const": "H2_ARCHITECTURE_OR_PROCESS_AUTHORITY"
+    },
+    "question": {
+      "const": "Should the current R02A1 Closure Patch be accepted, revised, or rejected after independent review?"
+    },
+    "recommended_option": {
+      "const": "PENDING_INDEPENDENT_REVIEW"
+    },
+    "recommendation_rationale": {
+      "const": "The current package is a closure patch under review. Independent review must decide ACCEPT_R02A1_CLOSURE_PATCH, REVISE_R02A1_CLOSURE_PATCH, or REJECT_R02A1_CLOSURE_PATCH. This record does not authorize WP0B implementation."
+    },
+    "options": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "description",
+            "benefits",
+            "costs",
+            "risks",
+            "reversible",
+            "effect"
+          ],
+          "properties": {
+            "id": {
+              "const": "ACCEPT_R02A1_CLOSURE_PATCH"
+            },
+            "description": {
+              "const": "Accept the current R02A1 Closure Patch only if independent review returns P0=0, P1=0, and target_signal_eligibility=ELIGIBLE."
+            },
+            "benefits": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Allows Controller/Human to consider issuing WP0B_ENTRY_GATE_ACCEPTED."
+                },
+                {
+                  "const": "Keeps WP3 Task 2 runtime and Task 3 paused."
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "costs": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Requires a separate later Controller/Human decision before implementation can begin."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "risks": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "If accepted with hidden P1 gaps, WP0B implementation may repeat known control-plane mistakes."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "reversible": {
+              "const": true
+            },
+            "effect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "may_issue_entry_gate_signal_after_review",
+                "implementation_authorized",
+                "automatic_next_authorized",
+                "wp3_task2_runtime_authorized",
+                "wp3_task3_authorized",
+                "release_or_deployment_authorized"
+              ],
+              "properties": {
+                "may_issue_entry_gate_signal_after_review": {
+                  "const": true
+                },
+                "implementation_authorized": {
+                  "const": false
+                },
+                "automatic_next_authorized": {
+                  "const": false
+                },
+                "wp3_task2_runtime_authorized": {
+                  "const": false
+                },
+                "wp3_task3_authorized": {
+                  "const": false
+                },
+                "release_or_deployment_authorized": {
+                  "const": false
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "description",
+            "benefits",
+            "costs",
+            "risks",
+            "reversible",
+            "effect"
+          ],
+          "properties": {
+            "id": {
+              "const": "REVISE_R02A1_CLOSURE_PATCH"
+            },
+            "description": {
+              "const": "Revise the current R02A1 Closure Patch in place."
+            },
+            "benefits": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Keeps correction scope bounded to executable baseline errata."
+                },
+                {
+                  "const": "Avoids a broad R02B package."
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "costs": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Adds one small delta review before implementation."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "risks": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Continued entry-gate iteration can delay the builder if validator gaps are not closed."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "reversible": {
+              "const": true
+            },
+            "effect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "may_issue_entry_gate_signal_after_review",
+                "implementation_authorized",
+                "automatic_next_authorized",
+                "wp3_task2_runtime_authorized",
+                "wp3_task3_authorized",
+                "release_or_deployment_authorized"
+              ],
+              "properties": {
+                "may_issue_entry_gate_signal_after_review": {
+                  "const": false
+                },
+                "implementation_authorized": {
+                  "const": false
+                },
+                "automatic_next_authorized": {
+                  "const": false
+                },
+                "wp3_task2_runtime_authorized": {
+                  "const": false
+                },
+                "wp3_task3_authorized": {
+                  "const": false
+                },
+                "release_or_deployment_authorized": {
+                  "const": false
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "description",
+            "benefits",
+            "costs",
+            "risks",
+            "reversible",
+            "effect"
+          ],
+          "properties": {
+            "id": {
+              "const": "REJECT_R02A1_CLOSURE_PATCH"
+            },
+            "description": {
+              "const": "Reject the current closure baseline and defer or redesign WP0B entry-gate work."
+            },
+            "benefits": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Avoids implementation on an unacceptable baseline."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "costs": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Manual review-package construction continues."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "risks": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "const": "Future WP3 rounds may continue to suffer avoidable packaging friction."
+                }
+              ],
+              "items": false,
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "reversible": {
+              "const": true
+            },
+            "effect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "may_issue_entry_gate_signal_after_review",
+                "implementation_authorized",
+                "automatic_next_authorized",
+                "wp3_task2_runtime_authorized",
+                "wp3_task3_authorized",
+                "release_or_deployment_authorized"
+              ],
+              "properties": {
+                "may_issue_entry_gate_signal_after_review": {
+                  "const": false
+                },
+                "implementation_authorized": {
+                  "const": false
+                },
+                "automatic_next_authorized": {
+                  "const": false
+                },
+                "wp3_task2_runtime_authorized": {
+                  "const": false
+                },
+                "wp3_task3_authorized": {
+                  "const": false
+                },
+                "release_or_deployment_authorized": {
+                  "const": false
+                }
+              }
+            }
+          }
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "default_without_response": {
+      "const": "PAUSE"
+    },
+    "future_controller_decision_required_after_acceptance": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "AUTHORIZE_ONE_BOUNDED_WP0B_IMPLEMENTATION_R01"
+        }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "forbidden_implicit_authorization": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "conditional_automatic_implementation_authorization"
+        },
+        {
+          "const": "WP0B implementation"
+        },
+        {
+          "const": "WP3 Task 2 runtime"
+        },
+        {
+          "const": "WP3 Task 3"
+        },
+        {
+          "const": "release"
+        },
+        {
+          "const": "deployment"
+        }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "evidence_paths": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "reviews/requests/REVIEW_PACKAGE_BUILDER_R02A1_CLOSURE_IN_PLACE_20260731.md"
+        },
+        {
+          "const": "reviews/requests/REVIEW_PACKAGE_BUILDER_R02A1_BASELINE_ERRATA_20260731.md"
+        },
+        {
+          "const": "reviews/requests/REVIEW_PACKAGE_BUILDER_R02A1_CLOSURE_PATCH_20260731.md"
+        },
+        {
+          "const": "reviews/requests/REVIEW_PACKAGE_BUILDER_R02A_PRE_IMPLEMENTATION_AMENDMENT_20260731.md"
+        },
+        {
+          "const": "reviews/requests/REVIEW_PACKAGE_BUILDER_APPLICATION_R02_20260731.md"
+        },
+        {
+          "const": "reviews/requests/WP0B_R02A1_CONTROL_STATE.json"
+        },
+        {
+          "const": "schemas/wp0b-r02a1-control-state.v1.schema.json"
+        },
+        {
+          "const": "schemas/wp0b-r02a1-hdr.v1.schema.json"
+        },
+        {
+          "const": "schemas/wp0b-r02a1-application-manifest.v1.schema.json"
+        },
+        {
+          "const": "schemas/wp0b-r02a1-traceability.v1.schema.json"
+        },
+        {
+          "const": "schemas/wp0b-r02a1-application-evidence.v1.schema.json"
+        },
+        {
+          "const": "reviews/requests/WP0B_R02A_TRACEABILITY_MATRIX_20260731.json"
+        },
+        {
+          "const": "reviews/requests/APPLICATION_MANIFEST_WP0B_REVIEW_PACKAGE_BUILDER_R02_20260731.json"
+        },
+        {
+          "const": "reviews/requests/APPLICATION_EVIDENCE_WP0B_REVIEW_PACKAGE_BUILDER_R02_20260731.json"
+        },
+        {
+          "const": "scripts/validate_wp0b_entry_gate_plan.py"
+        },
+        {
+          "const": "tests/test_wp0b_entry_gate_validator.py"
+        },
+        {
+          "const": "docs/superpowers/plans/2026-07-31-review-package-builder-r02.md"
+        },
+        {
+          "const": "docs/WORK_EFFICIENCY_RETROSPECTIVE.md"
+        }
+      ],
+      "items": false,
+      "minItems": 18,
+      "maxItems": 18
+    },
+    "created_at_utc": {
+      "const": "2026-07-31T15:18:54Z"
+    },
+    "status": {
+      "const": "PENDING"
+    }
+  }
+}

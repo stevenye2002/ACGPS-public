@@ -1,0 +1,24 @@
+schema_version: 1
+decision_id: HDR-0001
+project_id: ACGPS
+task_id: TASK-0001
+stage: PLAN_READY
+risk_level: R2
+trigger: H3_RISK_ACCEPTANCE
+question: Accept the residual review risk?
+recommended_option: pause
+recommendation_rationale: Review findings are blocking.
+options:
+  - id: pause
+    description: Pause until findings are fixed
+    benefits:
+      - preserves review integrity
+    costs:
+      - delays WP2
+    risks: []
+    reversible: true
+default_without_response: PAUSE
+evidence_paths:
+  - reviews/feedback/ACGPS_WP1_PROFESSIONAL_REVIEW_v1.0_20260720.md
+created_at_utc: "2026-07-20T00:00:00Z"
+status: PENDING

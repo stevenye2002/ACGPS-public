@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Package Ready Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ready_record_type",
+    "logical_round_id",
+    "package_zip",
+    "package_zip_sha256",
+    "detached_sha256",
+    "detached_sha256_file_sha256",
+    "immutable_build_record",
+    "immutable_build_record_sha256",
+    "artifact_set_digest",
+    "local_publication_root",
+    "local_publication_root_role",
+    "artifact_set_committed",
+    "authorization_granted",
+    "acceptance_signal_emitted",
+    "architecture_signal_issued",
+    "implementation_accepted",
+    "windows_sidecar_ref",
+    "linux_sidecar_ref",
+    "platform_matrix_ref",
+    "candidate_sha256",
+    "source_commit",
+    "source_tree",
+    "source_inventory_protocol_version",
+    "inventory_digest",
+    "source_baseline_digest",
+    "packaged_source_digest",
+    "source_manifest_projection_digest",
+    "source_inventory_count",
+    "source_baseline_count",
+    "packaged_source_count",
+    "source_manifest_count",
+    "automatic_next_authorized"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "ready_record_type": {
+      "const": "REVIEW_PACKAGE_READY_RECORD"
+    },
+    "logical_round_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_zip": {
+      "type": "string",
+      "minLength": 1
+    },
+    "package_zip_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "detached_sha256": {
+      "type": "string",
+      "minLength": 1
+    },
+    "detached_sha256_file_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "immutable_build_record": {
+      "type": "string",
+      "minLength": 1
+    },
+    "immutable_build_record_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact_set_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "local_publication_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "local_publication_root_role": {
+      "const": "NON_AUTHORITATIVE_LOCAL_DIAGNOSTIC"
+    },
+    "artifact_set_committed": {
+      "const": true
+    },
+    "authorization_granted": {
+      "const": false
+    },
+    "acceptance_signal_emitted": {
+      "const": false
+    },
+    "architecture_signal_issued": {
+      "const": false
+    },
+    "implementation_accepted": {
+      "const": false
+    },
+    "automatic_next_authorized": {
+      "const": false
+    },
+    "profile_id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9_]+$"
+    },
+    "review_profile_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "windows_sidecar_ref": {"$ref": "#/$defs/platformEvidenceSidecarRef"},
+    "linux_sidecar_ref": {"$ref": "#/$defs/platformEvidenceSidecarRef"},
+    "platform_matrix_ref": {"$ref": "#/$defs/platformMatrixRef"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_inventory_protocol_version": {"const": 1},
+    "inventory_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_baseline_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "packaged_source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_manifest_projection_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_inventory_count": {"type": "integer", "minimum": 0},
+    "source_baseline_count": {"type": "integer", "minimum": 0},
+    "packaged_source_count": {"type": "integer", "minimum": 0},
+    "source_manifest_count": {"type": "integer", "minimum": 0}
+  },
+  "$defs": {
+    "platformEvidenceSidecarRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "candidate_sha256", "platform"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*:)(?!.*[. ]$)[^/\\\\]+$",
+          "not": {
+            "anyOf": [
+              {"enum": [".", ".."]},
+              {"pattern": "^(?:[Cc][Oo][Nn]|[Cc][Oo][Nn][Ii][Nn][$]|[Cc][Oo][Nn][Oo][Uu][Tt][$]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\..*)?$"}
+            ]
+          }
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "platform": {"enum": ["windows", "linux"]}
+      }
+    },
+    "platformMatrixRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "candidate_sha256", "matrix_identity"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*:)(?!.*[. ]$)[^/\\\\]+$",
+          "not": {
+            "anyOf": [
+              {"enum": [".", ".."]},
+              {"pattern": "^(?:[Cc][Oo][Nn]|[Cc][Oo][Nn][Ii][Nn][$]|[Cc][Oo][Nn][Oo][Uu][Tt][$]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\..*)?$"}
+            ]
+          }
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "matrix_identity": {"const": "TASK6_MINIMAL_PLATFORM_MATRIX_V1"}
+      }
+    }
+  }
+}

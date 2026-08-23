@@ -1,0 +1,22 @@
+schema_version: 1
+task_id: TASK-0001
+project_id: ACGPS
+title: Validate WP1 contracts
+requested_outcome: Runtime contracts reject malformed control-plane records
+business_context: WP1 review remediation
+in_scope:
+  - contract validation
+out_of_scope:
+  - production release
+acceptance_criteria:
+  - invalid records fail closed
+known_constraints:
+  - standard library first
+known_risks:
+  - contract drift
+affected_surfaces:
+  - contracts
+source_paths:
+  - acgps/contracts.py
+requested_by: human_owner
+created_at_utc: "2026-07-20T00:00:00Z"
