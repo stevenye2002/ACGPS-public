@@ -11,10 +11,12 @@ from acgps.workflow_contracts import canonical_json_bytes
 def _validate_relevant_paths(paths: list[str]) -> None:
     for value in paths:
         segments = value.split("/")
+        windows_path = PureWindowsPath(value)
         if (
             "\\" in value
             or PurePosixPath(value).is_absolute()
-            or PureWindowsPath(value).is_absolute()
+            or windows_path.is_absolute()
+            or bool(windows_path.drive)
             or any(segment in {"", ".", ".."} for segment in segments)
         ):
             raise ValueError(f"relevant path must be a safe relative POSIX path: {value}")

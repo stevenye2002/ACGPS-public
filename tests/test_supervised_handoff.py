@@ -39,7 +39,13 @@ class SupervisedCoderHandoffTests(unittest.TestCase):
             build_supervised_coder_handoff_preview(packet)
 
     def test_rejects_unsafe_relevant_paths(self) -> None:
-        unsafe_paths = ("../outside.py", "/absolute.py", "C:/absolute.py", r"docs\file.py")
+        unsafe_paths = (
+            "../outside.py",
+            "/absolute.py",
+            "C:/absolute.py",
+            "C:outside.py",
+            r"docs\file.py",
+        )
         for unsafe_path in unsafe_paths:
             with self.subTest(unsafe_path=unsafe_path):
                 packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
