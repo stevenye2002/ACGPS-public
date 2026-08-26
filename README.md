@@ -47,6 +47,21 @@ The command writes the preview to stdout only. The preview is not authority,
 execution evidence, or permission to start a process; a human-supervised coder
 session still requires separate operator authorization.
 
+After the supervised coder returns an `AGENT_RESULT` record, an operator can
+validate its contract and packet binding without launching a process or changing
+workflow state:
+
+```powershell
+python -m acgps coding result-receipt-preview `
+  --packet path/to/coder-packet.json `
+  --result path/to/coder-result.json
+```
+
+The receipt preview hashes both records and rejects mismatched packet identities,
+non-`CODER` records, and unsafe claimed file paths. It remains non-authoritative:
+the reported next state is only the coder's recommendation, and a separate
+operator-authorized workflow transition is still required.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs

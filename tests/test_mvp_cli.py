@@ -61,6 +61,24 @@ def valid_policy_result() -> dict[str, object]:
     }
 
 
+def valid_agent_result() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "packet_id": "ftic-governance-1-coder-v1",
+        "role": "CODER",
+        "status": "DONE",
+        "summary": "Completed the bounded implementation.",
+        "changed_files": ["docs/FTIC_PROJECT_REPLAN.md"],
+        "created_files": [],
+        "commands_run": ["python -m unittest tests.test_supervised_handoff"],
+        "evidence_paths": ["evidence/focused.txt"],
+        "assumptions": [],
+        "concerns": [],
+        "blocker": None,
+        "recommended_next_state": "TASK_REVIEW",
+    }
+
+
 def valid_decision_request() -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -405,6 +423,37 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["packet"], packet)
         self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
         self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_previews_validated_coder_result_receipt_without_state_writes(self) -> None:
+        from acgps.task_packets import generate_task_packet
+
+        packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        agent_result = valid_agent_result()
+        packet_path = self.state_root / "coder-packet.json"
+        result_path = self.state_root / "coder-result.json"
+        packet_path.write_bytes(canonical_json_bytes(packet) + b"\n")
+        result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "coding",
+            "result-receipt-preview",
+            "--packet",
+            str(packet_path),
+            "--result",
+            str(result_path),
+        )
+
+        self.assertEqual(result["status"], "RESULT_RECEIPT_PREVIEW")
+        self.assertEqual(result["agent_result"], agent_result)
+        self.assertEqual(
+            result["agent_result_sha256"],
+            hashlib.sha256(canonical_json_bytes(agent_result)).hexdigest(),
+        )
+        self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
     def test_cli_rejects_duplicate_keys_in_coding_execution_record(self) -> None:

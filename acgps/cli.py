@@ -10,7 +10,10 @@ from acgps.contracts import validate_contract
 from acgps.human_decisions import DecisionQueue
 from acgps.policy import evaluate_policy, load_policy_bundle, validate_project_registration
 from acgps.review_adapter import build_release_candidate_manifest, verify_release_candidate_manifest
-from acgps.supervised_handoff import build_supervised_coder_handoff_preview
+from acgps.supervised_handoff import (
+    build_supervised_coder_handoff_preview,
+    build_supervised_coder_result_receipt_preview,
+)
 from acgps.task_packets import generate_task_packet
 from acgps.workflow_engine import WorkflowEngine
 from acgps.workflow_contracts import canonical_json_bytes
@@ -163,6 +166,9 @@ def _build_parser() -> argparse.ArgumentParser:
     coding_record_validate.add_argument("--record", required=True)
     coding_handoff_preview = coding_commands.add_parser("handoff-preview")
     coding_handoff_preview.add_argument("--packet", required=True)
+    coding_result_receipt_preview = coding_commands.add_parser("result-receipt-preview")
+    coding_result_receipt_preview.add_argument("--packet", required=True)
+    coding_result_receipt_preview.add_argument("--result", required=True)
     return parser
 
 
@@ -294,6 +300,11 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.group == "coding" and args.command == "handoff-preview":
         packet = _read_canonical_json_mapping(Path(args.packet))
         return build_supervised_coder_handoff_preview(packet)
+
+    if args.group == "coding" and args.command == "result-receipt-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        agent_result = _read_canonical_json_mapping(Path(args.result))
+        return build_supervised_coder_result_receipt_preview(packet, agent_result)
 
     raise ValueError("unsupported command")
 

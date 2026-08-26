@@ -3,13 +3,110 @@ from __future__ import annotations
 import hashlib
 import unittest
 
-from acgps.supervised_handoff import build_supervised_coder_handoff_preview
+from acgps.supervised_handoff import (
+    build_supervised_coder_handoff_preview,
+    build_supervised_coder_result_receipt_preview,
+)
 from acgps.task_packets import generate_task_packet
 from acgps.workflow_contracts import canonical_json_bytes
-from tests.test_mvp_cli import valid_intake, valid_policy_result
+from tests.test_mvp_cli import valid_agent_result, valid_intake, valid_policy_result
 
 
 class SupervisedCoderHandoffTests(unittest.TestCase):
+    def test_builds_deterministic_validated_result_receipt_preview(self) -> None:
+        packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        agent_result = valid_agent_result()
+
+        preview = build_supervised_coder_result_receipt_preview(packet, agent_result)
+
+        self.assertEqual(preview["status"], "RESULT_RECEIPT_PREVIEW")
+        self.assertEqual(preview["mode"], "HUMAN_SUPERVISED")
+        self.assertEqual(preview["packet_id"], packet["packet_id"])
+        self.assertEqual(
+            preview["packet_sha256"],
+            hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+        )
+        self.assertEqual(preview["agent_result"], agent_result)
+        self.assertEqual(
+            preview["agent_result_sha256"],
+            hashlib.sha256(canonical_json_bytes(agent_result)).hexdigest(),
+        )
+        self.assertEqual(
+            preview["controls"],
+            {
+                "model_execution": "NOT_STARTED",
+                "operator_authorization_required": True,
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        )
+
+    def test_rejects_result_for_a_different_packet(self) -> None:
+        packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        agent_result = valid_agent_result()
+        agent_result["packet_id"] = "another-coder-packet-v1"
+
+        with self.assertRaisesRegex(ValueError, "packet_id"):
+            build_supervised_coder_result_receipt_preview(
+                packet,
+                agent_result,
+            )
+
+    def test_rejects_non_coder_packet_or_result(self) -> None:
+        coder_packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        planner_packet = generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+        cases = (
+            (
+                planner_packet,
+                dict(valid_agent_result(), packet_id=planner_packet["packet_id"]),
+            ),
+            (
+                coder_packet,
+                dict(valid_agent_result(), role="PLANNER"),
+            ),
+        )
+
+        for packet, agent_result in cases:
+            with self.subTest(packet_role=packet["role"], result_role=agent_result["role"]):
+                with self.assertRaisesRegex(ValueError, "CODER"):
+                    build_supervised_coder_result_receipt_preview(
+                        packet,
+                        agent_result,
+                    )
+
+    def test_rejects_unsafe_result_file_claims(self) -> None:
+        packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        unsafe_paths = (
+            "../outside.py",
+            "/absolute.py",
+            "C:/absolute.py",
+            "C:outside.py",
+            r"docs\file.py",
+        )
+
+        for field_name in ("changed_files", "created_files"):
+            for unsafe_path in unsafe_paths:
+                with self.subTest(field_name=field_name, unsafe_path=unsafe_path):
+                    agent_result = valid_agent_result()
+                    agent_result[field_name] = [unsafe_path]
+
+                    with self.assertRaisesRegex(ValueError, "result path"):
+                        build_supervised_coder_result_receipt_preview(
+                            packet,
+                            agent_result,
+                        )
+
+    def test_result_receipt_rejects_unsafe_packet_paths(self) -> None:
+        packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        packet["relevant_paths"] = ["C:outside.py"]
+
+        with self.assertRaisesRegex(ValueError, "relevant path"):
+            build_supervised_coder_result_receipt_preview(
+                packet,
+                valid_agent_result(),
+            )
+
     def test_builds_deterministic_validated_no_launch_preview(self) -> None:
         packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
 
