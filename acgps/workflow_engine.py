@@ -15,7 +15,10 @@ from acgps.review_adapter import (
     validate_review_findings,
     verify_release_candidate_manifest,
 )
-from acgps.supervised_handoff import build_supervised_coder_result_receipt_preview
+from acgps.supervised_handoff import (
+    build_supervised_coder_result_receipt_preview,
+    build_supervised_reviewer_result_receipt_preview,
+)
 from acgps.workflow_contracts import (
     canonical_json_bytes,
     validate_task_initialization_request,
@@ -221,7 +224,7 @@ class WorkflowEngine:
                 for binding in evidence_bindings
             ]
             if bound_evidence != validated_evidence:
-                raise WorkflowEngineError("TASK_REVIEW evidence changed after validation")
+                raise WorkflowEngineError(f"{actual_target} evidence changed after validation")
 
         decision_binding = None
         pending_decision_id = None
@@ -365,6 +368,11 @@ class WorkflowEngine:
         current: dict[str, Any],
     ) -> list[tuple[str, int, str]] | None:
         try:
+            if (
+                current["current_state"] == "TASK_REVIEW"
+                and target in {"FIX_REQUIRED", "INTEGRATING"}
+            ):
+                return self._validate_reviewer_transition_evidence(target, paths, current)
             if target == "FIX_REQUIRED":
                 validate_fix_required_findings(paths)
             elif target == "INTEGRATING":
@@ -441,12 +449,83 @@ class WorkflowEngine:
             raise WorkflowEngineError("CODER result must recommend TASK_REVIEW")
         return [packet_snapshot, result_snapshot]
 
+    def _validate_reviewer_transition_evidence(
+        self,
+        target: str,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> list[tuple[str, int, str]]:
+        if len(paths) < 3:
+            raise WorkflowEngineError(
+                f"{target} from TASK_REVIEW requires the canonical REVIEWER packet and result "
+                "followed by review findings"
+            )
+        packet, packet_snapshot = self._read_canonical_evidence_json(paths[0])
+        agent_result, result_snapshot = self._read_canonical_evidence_json(paths[1])
+        try:
+            build_supervised_reviewer_result_receipt_preview(packet, agent_result)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            packet["project_id"] != current["project_id"]
+            or packet["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "REVIEWER packet project_id and task_id must match the current task"
+            )
+        if agent_result["status"] not in {"DONE", "DONE_WITH_CONCERNS"}:
+            raise WorkflowEngineError(f"{target} requires a completed REVIEWER result")
+        if agent_result["recommended_next_state"] != target:
+            raise WorkflowEngineError(f"REVIEWER result must recommend {target}")
+
+        finding_paths = paths[2:]
+        if target == "FIX_REQUIRED":
+            records = validate_fix_required_findings(finding_paths)
+        else:
+            records = validate_review_findings(finding_paths)
+            required_ids = self._current_fix_cycle_blocker_ids(current)
+            closed_ids = {
+                record["finding_id"]
+                for record in records
+                if record["status"] in {"VERIFIED", "CLOSED"}
+            }
+            missing_ids = sorted(required_ids - closed_ids)
+            if missing_ids:
+                raise WorkflowEngineError(
+                    "INTEGRATING requires closed review evidence for: " + ", ".join(missing_ids)
+                )
+
+        finding_snapshots: list[tuple[str, int, str]] = []
+        for path, validated_record in zip(finding_paths, records, strict=True):
+            current_record, snapshot = self._read_evidence_json_snapshot(path)
+            if current_record != validated_record:
+                raise WorkflowEngineError(f"{target} review finding changed during validation")
+            finding_snapshots.append(snapshot)
+        return [packet_snapshot, result_snapshot, *finding_snapshots]
+
     def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
         blocker_ids: set[str] = set()
         for event in self._current_fix_cycle_events(current):
             if event["to_state"] != "FIX_REQUIRED":
                 continue
-            paths = [self._bound_evidence_path(binding) for binding in event["evidence_bindings"]]
+            evidence_bindings = event["evidence_bindings"]
+            paths = [self._bound_evidence_path(binding) for binding in evidence_bindings]
+            if event["from_state"] == "TASK_REVIEW" and paths:
+                first_record = self._read_json(paths[0])
+                if first_record.get("role") == "REVIEWER":
+                    if len(paths) < 3:
+                        raise WorkflowEngineError(
+                            "stored FIX_REQUIRED reviewer evidence is incomplete"
+                        )
+                    packet, _ = self._read_canonical_evidence_json(paths[0])
+                    agent_result, _ = self._read_canonical_evidence_json(paths[1])
+                    try:
+                        build_supervised_reviewer_result_receipt_preview(packet, agent_result)
+                    except (ContractValidationError, ValueError) as exc:
+                        raise WorkflowEngineError(
+                            f"stored FIX_REQUIRED reviewer evidence is invalid: {exc}"
+                        ) from exc
+                    paths = paths[2:]
             records = validate_fix_required_findings(paths)
             blocker_ids.update(
                 record["finding_id"]
@@ -685,6 +764,20 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 f"evidence must use canonical JSON bytes with one terminal LF: {path}"
             )
+        return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
+
+    def _read_evidence_json_snapshot(
+        self,
+        path: Path,
+    ) -> tuple[dict[str, Any], tuple[str, int, str]]:
+        logical_path, resolved = self._evidence_location(path)
+        try:
+            payload = resolved.read_bytes()
+            record = json.loads(payload.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
+        if not isinstance(record, dict):
+            raise WorkflowEngineError(f"evidence must be a mapping: {path}")
         return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
 
     @staticmethod

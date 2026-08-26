@@ -101,6 +101,14 @@ Both commands write only to stdout. They do not launch a process, change
 workflow state, read or accept review findings, or authorize a transition from
 `TASK_REVIEW`; those remain separate controller operations.
 
+For an operator-authorized transition from `TASK_REVIEW`, provide the same
+canonical Reviewer packet first, its canonical result second, and one or more
+review-finding records after them. The controller admits `FIX_REQUIRED` or
+`INTEGRATING` only when the Reviewer result is complete, bound to the current
+project/task packet, and recommends that exact target state. Existing finding
+severity and closure rules still apply, and every supplied evidence file is
+SHA-256-bound into the transition audit.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs

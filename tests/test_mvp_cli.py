@@ -790,6 +790,35 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(coder_packet["packet_id"], valid_agent_result()["packet_id"])
         coder_result_path = self.state_root / "packets" / "coder-result.json"
         coder_result_path.write_bytes(canonical_json_bytes(valid_agent_result()) + b"\n")
+        reviewer_packet_path = self.state_root / "packets" / "reviewer.json"
+        reviewer_packet = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "REVIEWER",
+            "--created-at-utc",
+            "2026-08-23T00:00:32Z",
+            "--output",
+            str(reviewer_packet_path),
+        )
+        reviewer_result_path = self.state_root / "packets" / "reviewer-result.json"
+        reviewer_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=reviewer_packet["packet_id"],
+                    role="REVIEWER",
+                    summary="Completed the bounded independent review.",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="INTEGRATING",
+                )
+            )
+            + b"\n"
+        )
 
         rc_dir = self.state_root / "rc"
         source = rc_dir / "evidence" / "source-artifact.txt"
@@ -811,11 +840,15 @@ class MVPCLITests(unittest.TestCase):
             ("PLAN_READY", "PLANNER", [source]),
             ("IMPLEMENTING", "CODER", [source]),
             ("TASK_REVIEW", "CODER", [coder_packet_path, coder_result_path]),
-            ("INTEGRATING", "REVIEWER", [review]),
+            (
+                "INTEGRATING",
+                "REVIEWER",
+                [reviewer_packet_path, reviewer_result_path, review],
+            ),
             ("VERIFIED", "VERIFIER", [verification]),
         ]
         for index, (target, actor, evidence_paths) in enumerate(transitions, start=1):
-            if target == "TASK_REVIEW":
+            if target in {"TASK_REVIEW", "INTEGRATING"}:
                 before = self._run(
                     "task",
                     "status",
@@ -837,7 +870,7 @@ class MVPCLITests(unittest.TestCase):
                     "--created-at-utc",
                     f"2026-08-23T00:{index:02d}:00Z",
                     "--evidence",
-                    str(source),
+                    str(source if target == "TASK_REVIEW" else review),
                     expected_exit=2,
                 )
                 self.assertEqual(rejection["status"], "REJECTED")

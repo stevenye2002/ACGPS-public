@@ -9,12 +9,14 @@ import unittest
 from unittest.mock import patch
 
 from acgps.review_adapter import build_release_candidate_manifest
+from acgps.task_packets import generate_task_packet
 from acgps.workflow_contracts import canonical_json_bytes
 from tests.test_mvp_cli import (
     valid_agent_result,
     valid_coder_packet,
     valid_decision_request,
     valid_intake,
+    valid_policy_result,
     valid_review_finding,
     valid_verification_record,
 )
@@ -40,6 +42,45 @@ def write_task_review_evidence(engine) -> list[Path]:
     packet_path.write_bytes(canonical_json_bytes(valid_coder_packet()) + b"\n")
     result_path.write_bytes(canonical_json_bytes(valid_agent_result()) + b"\n")
     return [packet_path, result_path]
+
+
+def valid_reviewer_packet() -> dict[str, object]:
+    return generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
+
+
+def valid_reviewer_result(*, recommended_next_state: str) -> dict[str, object]:
+    return dict(
+        valid_agent_result(),
+        packet_id="ftic-governance-1-reviewer-v1",
+        role="REVIEWER",
+        summary="Completed the bounded independent review.",
+        changed_files=[],
+        created_files=[],
+        recommended_next_state=recommended_next_state,
+    )
+
+
+def write_reviewer_transition_evidence(
+    engine,
+    finding_paths: list[Path],
+    *,
+    target: str,
+    packet: dict[str, object] | None = None,
+    result: dict[str, object] | None = None,
+) -> list[Path]:
+    evidence_dir = (
+        engine.state_root
+        / "reviewer-transition-evidence"
+        / f"{target.casefold()}-{len(engine.audit('ftic-governance-1')) + 1:04d}"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    packet_path = evidence_dir / "reviewer-packet.json"
+    result_path = evidence_dir / "reviewer-result.json"
+    packet_path.write_bytes(canonical_json_bytes(packet or valid_reviewer_packet()) + b"\n")
+    result_path.write_bytes(
+        canonical_json_bytes(result or valid_reviewer_result(recommended_next_state=target)) + b"\n"
+    )
+    return [packet_path, result_path, *finding_paths]
 
 
 def advance_to_implementing(engine, *, hour: int) -> Path:
@@ -286,6 +327,165 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_task_review_accepts_bound_reviewer_result_for_review_outcomes(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        cases = (
+            ("FIX_REQUIRED", "OPEN"),
+            ("INTEGRATING", "CLOSED"),
+        )
+        for target, finding_status in cases:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                advance_to_task_review(engine, hour=19)
+                finding_path = state_root / "review-finding.json"
+                write_review_finding(finding_path, "finding-a", status=finding_status)
+                evidence_paths = write_reviewer_transition_evidence(
+                    engine,
+                    [finding_path],
+                    target=target,
+                )
+
+                state = engine.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="REVIEWER",
+                    evidence_paths=evidence_paths,
+                    created_at_utc="2026-08-23T19:07:00Z",
+                )
+
+                self.assertEqual(state["current_state"], target)
+                self.assertEqual(
+                    [binding["content_sha256"] for binding in engine.audit("ftic-governance-1")[-1]["evidence_bindings"]],
+                    [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence_paths],
+                )
+
+    def test_task_review_rejects_unbound_or_invalid_reviewer_result_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        packet = valid_reviewer_packet()
+        result = valid_reviewer_result(recommended_next_state="INTEGRATING")
+        cases = (
+            (
+                "finding only",
+                packet,
+                result,
+                "canonical REVIEWER packet and result",
+                True,
+            ),
+            (
+                "wrong task",
+                dict(packet, task_id="other-task"),
+                result,
+                "project_id and task_id must match",
+                False,
+            ),
+            (
+                "mismatched packet",
+                packet,
+                dict(result, packet_id="other-reviewer-v1"),
+                "packet_id does not match",
+                False,
+            ),
+            (
+                "unfinished result",
+                packet,
+                dict(result, status="NEEDS_CONTEXT"),
+                "completed REVIEWER result",
+                False,
+            ),
+            (
+                "wrong next state",
+                packet,
+                dict(result, recommended_next_state="FIX_REQUIRED"),
+                "recommend INTEGRATING",
+                False,
+            ),
+        )
+        for name, candidate_packet, candidate_result, message, finding_only in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                advance_to_task_review(engine, hour=20)
+                finding_path = state_root / "review-finding.json"
+                write_review_finding(finding_path, "finding-a", status="CLOSED")
+                evidence_paths = (
+                    [finding_path]
+                    if finding_only
+                    else write_reviewer_transition_evidence(
+                        engine,
+                        [finding_path],
+                        target="INTEGRATING",
+                        packet=candidate_packet,
+                        result=candidate_result,
+                    )
+                )
+                before_state = engine.status("ftic-governance-1")
+                before_audit = engine.audit("ftic-governance-1")
+
+                with self.assertRaisesRegex(WorkflowEngineError, message):
+                    engine.advance(
+                        "ftic-governance-1",
+                        "INTEGRATING",
+                        actor="REVIEWER",
+                        evidence_paths=evidence_paths,
+                        created_at_utc="2026-08-23T20:07:00Z",
+                    )
+
+                self.assertEqual(engine.status("ftic-governance-1"), before_state)
+                self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_reviewer_transition_rejects_finding_replaced_after_validation_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=21)
+            finding_path = state_root / "review-finding.json"
+            write_review_finding(finding_path, "finding-a", status="CLOSED")
+            evidence_paths = write_reviewer_transition_evidence(
+                engine,
+                [finding_path],
+                target="INTEGRATING",
+            )
+            replacement = dict(
+                valid_review_finding(status="CLOSED"),
+                finding_id="finding-replaced",
+                review_id="review-finding-replaced",
+                summary="Finding replaced after validation.",
+                disposition="ALREADY_FIXED",
+            )
+            replacement_payload = json.dumps(replacement, sort_keys=True).encode("utf-8") + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_before_binding(path, *args):
+                if Path(path) == finding_path:
+                    finding_path.write_bytes(replacement_payload)
+                return original_binding(path, *args)
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_before_binding,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "INTEGRATING evidence changed after validation",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "INTEGRATING",
+                    actor="REVIEWER",
+                    evidence_paths=evidence_paths,
+                    created_at_utc="2026-08-23T21:07:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_governance_task_reaches_rc_ready_with_independent_evidence(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
@@ -331,19 +531,24 @@ class WorkflowEngineTests(unittest.TestCase):
             evidence_dir.mkdir(exist_ok=True)
             review_path = evidence_dir / "review.json"
             review_path.write_text(json.dumps(valid_review_finding(), sort_keys=True) + "\n", encoding="utf-8")
+            reviewer_integration_evidence = write_reviewer_transition_evidence(
+                engine,
+                [review_path],
+                target="INTEGRATING",
+            )
             with self.assertRaises(WorkflowEngineError):
                 engine.advance(
                     "ftic-governance-1",
                     "INTEGRATING",
                     actor="CODER",
-                    evidence_paths=[review_path],
+                    evidence_paths=reviewer_integration_evidence,
                     created_at_utc="2026-08-23T01:01:00Z",
                 )
             state = engine.advance(
                 "ftic-governance-1",
                 "INTEGRATING",
                 actor="REVIEWER",
-                evidence_paths=[review_path],
+                evidence_paths=reviewer_integration_evidence,
                 created_at_utc="2026-08-23T01:01:00Z",
             )
             self.assertEqual(state["current_state"], "INTEGRATING")
@@ -449,6 +654,11 @@ class WorkflowEngineTests(unittest.TestCase):
             evidence_dir.mkdir()
             closed_finding = evidence_dir / "closed-a.json"
             write_review_finding(closed_finding, "finding-a", status="CLOSED")
+            reviewer_fix_evidence = write_reviewer_transition_evidence(
+                engine,
+                [closed_finding],
+                target="FIX_REQUIRED",
+            )
             before = tree_bytes(state_root)
 
             with self.assertRaisesRegex(WorkflowEngineError, "open P0 or P1 review finding"):
@@ -456,7 +666,7 @@ class WorkflowEngineTests(unittest.TestCase):
                     "ftic-governance-1",
                     "FIX_REQUIRED",
                     actor="REVIEWER",
-                    evidence_paths=[closed_finding],
+                    evidence_paths=reviewer_fix_evidence,
                     created_at_utc="2026-08-23T11:07:00Z",
                 )
 
@@ -480,7 +690,11 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "FIX_REQUIRED",
                 actor="REVIEWER",
-                evidence_paths=[open_a],
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_a],
+                    target="FIX_REQUIRED",
+                ),
                 created_at_utc="2026-08-23T12:07:00Z",
             )
             engine.advance(
@@ -501,7 +715,11 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "FIX_REQUIRED",
                 actor="REVIEWER",
-                evidence_paths=[open_b],
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_b],
+                    target="FIX_REQUIRED",
+                ),
                 created_at_utc="2026-08-23T12:10:00Z",
             )
             engine.advance(
@@ -522,6 +740,16 @@ class WorkflowEngineTests(unittest.TestCase):
             closed_b = evidence_dir / "closed-b.json"
             write_review_finding(closed_a, "finding-a", status="CLOSED")
             write_review_finding(closed_b, "finding-b", status="CLOSED")
+            unrelated_integration_evidence = write_reviewer_transition_evidence(
+                engine,
+                [closed_b],
+                target="INTEGRATING",
+            )
+            complete_integration_evidence = write_reviewer_transition_evidence(
+                engine,
+                [closed_a, closed_b],
+                target="INTEGRATING",
+            )
             before = tree_bytes(state_root)
 
             with self.assertRaisesRegex(WorkflowEngineError, "finding-a"):
@@ -529,7 +757,7 @@ class WorkflowEngineTests(unittest.TestCase):
                     "ftic-governance-1",
                     "INTEGRATING",
                     actor="REVIEWER",
-                    evidence_paths=[closed_b],
+                    evidence_paths=unrelated_integration_evidence,
                     created_at_utc="2026-08-23T12:13:00Z",
                 )
 
@@ -538,9 +766,60 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "INTEGRATING",
                 actor="REVIEWER",
-                evidence_paths=[closed_a, closed_b],
+                evidence_paths=complete_integration_evidence,
                 created_at_utc="2026-08-23T12:14:00Z",
             )
+            self.assertEqual(integrated["current_state"], "INTEGRATING")
+
+    def test_reviewer_binding_preserves_legacy_fix_cycle_evidence(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            generic_evidence = advance_to_task_review(engine, hour=22)
+            evidence_dir = state_root / "evidence"
+            evidence_dir.mkdir()
+            legacy_open = evidence_dir / "legacy-open.json"
+            write_review_finding(legacy_open, "finding-legacy", status="OPEN")
+
+            with patch.object(engine, "_validate_gate_evidence", return_value=None):
+                engine.advance(
+                    "ftic-governance-1",
+                    "FIX_REQUIRED",
+                    actor="REVIEWER",
+                    evidence_paths=[legacy_open],
+                    created_at_utc="2026-08-23T22:07:00Z",
+                )
+            engine.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=[generic_evidence],
+                created_at_utc="2026-08-23T22:08:00Z",
+            )
+            engine.advance(
+                "ftic-governance-1",
+                "TASK_REVIEW",
+                actor="CODER",
+                evidence_paths=write_task_review_evidence(engine),
+                created_at_utc="2026-08-23T22:09:00Z",
+            )
+            closed = evidence_dir / "legacy-closed.json"
+            write_review_finding(closed, "finding-legacy", status="CLOSED")
+
+            integrated = engine.advance(
+                "ftic-governance-1",
+                "INTEGRATING",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [closed],
+                    target="INTEGRATING",
+                ),
+                created_at_utc="2026-08-23T22:10:00Z",
+            )
+
             self.assertEqual(integrated["current_state"], "INTEGRATING")
 
     def test_fix_cycle_rejects_tampered_bound_finding_without_mutation(self) -> None:
@@ -558,7 +837,11 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "FIX_REQUIRED",
                 actor="REVIEWER",
-                evidence_paths=[open_a],
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_a],
+                    target="FIX_REQUIRED",
+                ),
                 created_at_utc="2026-08-23T13:07:00Z",
             )
             engine.advance(
@@ -580,6 +863,11 @@ class WorkflowEngineTests(unittest.TestCase):
             open_a.write_text(json.dumps(tampered, sort_keys=True) + "\n", encoding="utf-8")
             closed_a = evidence_dir / "closed-a.json"
             write_review_finding(closed_a, "finding-a", status="CLOSED")
+            reviewer_integration_evidence = write_reviewer_transition_evidence(
+                engine,
+                [closed_a],
+                target="INTEGRATING",
+            )
             before = tree_bytes(state_root)
 
             with self.assertRaisesRegex(WorkflowEngineError, "binding content changed"):
@@ -587,7 +875,7 @@ class WorkflowEngineTests(unittest.TestCase):
                     "ftic-governance-1",
                     "INTEGRATING",
                     actor="REVIEWER",
-                    evidence_paths=[closed_a],
+                    evidence_paths=reviewer_integration_evidence,
                     created_at_utc="2026-08-23T13:10:00Z",
                 )
 
@@ -597,7 +885,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "INTEGRATING",
                 actor="REVIEWER",
-                evidence_paths=[closed_a],
+                evidence_paths=reviewer_integration_evidence,
                 created_at_utc="2026-08-23T13:11:00Z",
             )
             self.assertEqual(integrated["current_state"], "INTEGRATING")
@@ -617,7 +905,11 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "FIX_REQUIRED",
                 actor="REVIEWER",
-                evidence_paths=[open_a],
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_a],
+                    target="FIX_REQUIRED",
+                ),
                 created_at_utc="2026-08-23T14:07:00Z",
             )
             start_recovery_generation(engine, fixed, created_at_utc="2026-08-23T14:08:00Z")
@@ -639,6 +931,16 @@ class WorkflowEngineTests(unittest.TestCase):
             closed_a = evidence_dir / "closed-a.json"
             write_review_finding(unrelated, "finding-b", status="CLOSED")
             write_review_finding(closed_a, "finding-a", status="CLOSED")
+            unrelated_integration_evidence = write_reviewer_transition_evidence(
+                engine,
+                [unrelated],
+                target="INTEGRATING",
+            )
+            closed_integration_evidence = write_reviewer_transition_evidence(
+                engine,
+                [closed_a],
+                target="INTEGRATING",
+            )
             before = tree_bytes(state_root)
 
             with self.assertRaisesRegex(WorkflowEngineError, "finding-a"):
@@ -646,7 +948,7 @@ class WorkflowEngineTests(unittest.TestCase):
                     "ftic-governance-1",
                     "INTEGRATING",
                     actor="REVIEWER",
-                    evidence_paths=[unrelated],
+                    evidence_paths=unrelated_integration_evidence,
                     created_at_utc="2026-08-23T14:11:00Z",
                 )
 
@@ -655,7 +957,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "INTEGRATING",
                 actor="REVIEWER",
-                evidence_paths=[closed_a],
+                evidence_paths=closed_integration_evidence,
                 created_at_utc="2026-08-23T14:12:00Z",
             )
             self.assertEqual(integrated["current_state"], "INTEGRATING")
@@ -677,7 +979,11 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "FIX_REQUIRED",
                 actor="REVIEWER",
-                evidence_paths=[open_a],
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_a],
+                    target="FIX_REQUIRED",
+                ),
                 created_at_utc="2026-08-23T15:07:00Z",
             )
             engine.advance(
@@ -698,7 +1004,11 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "INTEGRATING",
                 actor="REVIEWER",
-                evidence_paths=[closed_a],
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [closed_a],
+                    target="INTEGRATING",
+                ),
                 created_at_utc="2026-08-23T15:10:00Z",
             )
             engine.advance(
