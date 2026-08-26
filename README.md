@@ -34,6 +34,19 @@ python scripts/check.py setup
 python scripts/check.py full
 ```
 
+## Supervised coder handoff preview
+
+After generating a canonical `CODER` task packet, an operator can validate and
+preview the handoff without launching a model or writing workflow state:
+
+```powershell
+python -m acgps coding handoff-preview --packet path/to/coder-packet.json
+```
+
+The command writes the preview to stdout only. The preview is not authority,
+execution evidence, or permission to start a process; a human-supervised coder
+session still requires separate operator authorization.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs
