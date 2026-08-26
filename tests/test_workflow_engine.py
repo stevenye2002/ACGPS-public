@@ -243,6 +243,49 @@ class WorkflowEngineTests(unittest.TestCase):
 
                 self.assertEqual(tree_bytes(state_root), before)
 
+    def test_task_review_rejects_result_replaced_after_validation_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_implementing(engine, hour=18)
+            packet_path, result_path = write_task_review_evidence(engine)
+            replacement = dict(
+                valid_agent_result(),
+                status="BLOCKED",
+                blocker="Coder result was replaced after validation.",
+                recommended_next_state="WAITING_HUMAN",
+            )
+            replacement_payload = canonical_json_bytes(replacement) + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_before_binding(path, *args):
+                if Path(path) == result_path:
+                    result_path.write_bytes(replacement_payload)
+                return original_binding(path, *args)
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_before_binding,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "TASK_REVIEW evidence changed after validation",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "TASK_REVIEW",
+                    actor="CODER",
+                    evidence_paths=[packet_path, result_path],
+                    created_at_utc="2026-08-23T18:06:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_governance_task_reaches_rc_ready_with_independent_evidence(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

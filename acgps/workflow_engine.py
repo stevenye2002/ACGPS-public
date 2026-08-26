@@ -210,11 +210,18 @@ class WorkflowEngine:
         evidence_items = [Path(path) for path in evidence_paths]
         if not evidence_items:
             raise WorkflowEngineError("every accepted transition requires evidence")
-        self._validate_gate_evidence(actual_target, evidence_items, current)
+        validated_evidence = self._validate_gate_evidence(actual_target, evidence_items, current)
         evidence_bindings = [
             self._path_evidence_binding(path, token, sequence, index, actual_target, created_at_utc)
             for index, path in enumerate(evidence_items, start=1)
         ]
+        if validated_evidence is not None:
+            bound_evidence = [
+                (binding["path"], binding["size_bytes"], binding["content_sha256"])
+                for binding in evidence_bindings
+            ]
+            if bound_evidence != validated_evidence:
+                raise WorkflowEngineError("TASK_REVIEW evidence changed after validation")
 
         decision_binding = None
         pending_decision_id = None
@@ -356,7 +363,7 @@ class WorkflowEngine:
         target: str,
         paths: list[Path],
         current: dict[str, Any],
-    ) -> None:
+    ) -> list[tuple[str, int, str]] | None:
         try:
             if target == "FIX_REQUIRED":
                 validate_fix_required_findings(paths)
@@ -374,7 +381,7 @@ class WorkflowEngine:
                         "INTEGRATING requires closed review evidence for: " + ", ".join(missing_ids)
                     )
             elif target == "TASK_REVIEW":
-                self._validate_task_review_evidence(paths, current)
+                return self._validate_task_review_evidence(paths, current)
             elif target == "VERIFIED":
                 verified = False
                 boundary = self._fix_cycle_integration_boundary(current)
@@ -410,13 +417,13 @@ class WorkflowEngine:
         self,
         paths: list[Path],
         current: dict[str, Any],
-    ) -> None:
+    ) -> list[tuple[str, int, str]]:
         if len(paths) != 2:
             raise WorkflowEngineError(
                 "TASK_REVIEW requires the canonical CODER packet and result as exactly two evidence files"
             )
-        packet = self._read_canonical_evidence_json(paths[0])
-        agent_result = self._read_canonical_evidence_json(paths[1])
+        packet, packet_snapshot = self._read_canonical_evidence_json(paths[0])
+        agent_result, result_snapshot = self._read_canonical_evidence_json(paths[1])
         try:
             build_supervised_coder_result_receipt_preview(packet, agent_result)
         except (ContractValidationError, ValueError) as exc:
@@ -432,6 +439,7 @@ class WorkflowEngine:
             raise WorkflowEngineError("TASK_REVIEW requires a completed CODER result")
         if agent_result["recommended_next_state"] != "TASK_REVIEW":
             raise WorkflowEngineError("CODER result must recommend TASK_REVIEW")
+        return [packet_snapshot, result_snapshot]
 
     def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
         blocker_ids: set[str] = set()
@@ -644,8 +652,11 @@ class WorkflowEngine:
             raise WorkflowEngineError(f"evidence must be a mapping: {path}")
         return record
 
-    def _read_canonical_evidence_json(self, path: Path) -> dict[str, Any]:
-        _, resolved = self._evidence_location(path)
+    def _read_canonical_evidence_json(
+        self,
+        path: Path,
+    ) -> tuple[dict[str, Any], tuple[str, int, str]]:
+        logical_path, resolved = self._evidence_location(path)
         try:
             payload = resolved.read_bytes()
             text = payload.decode("utf-8")
@@ -674,7 +685,7 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 f"evidence must use canonical JSON bytes with one terminal LF: {path}"
             )
-        return record
+        return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
 
     @staticmethod
     def _canonical_sha(record: object) -> str:
