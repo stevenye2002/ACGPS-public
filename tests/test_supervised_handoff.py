@@ -300,5 +300,73 @@ class SupervisedReviewerHandoffTests(unittest.TestCase):
             self._result_builder()(packet, self._valid_result(packet))
 
 
+class WindowsPathSafetyTests(unittest.TestCase):
+    WINDOWS_UNSAFE_PATHS = (
+        "docs/spec.md:stream",
+        "docs/control\x00.txt",
+        "docs/control\x1f.txt",
+        "docs/trailing.",
+        "docs/trailing ",
+        "docs/NUL",
+        "docs/nul.txt",
+        "docs/COM1.log",
+        "docs/LPT9",
+        "docs/CONIN$",
+        'docs/invalid"name.txt',
+        "docs/invalid<name.txt",
+        "docs/invalid>name.txt",
+        "docs/invalid|name.txt",
+        "docs/invalid?name.txt",
+        "docs/invalid*name.txt",
+    )
+
+    @staticmethod
+    def _result(packet: dict[str, object], role: str) -> dict[str, object]:
+        return dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role=role,
+            changed_files=[],
+            created_files=[],
+            recommended_next_state=("TASK_REVIEW" if role == "CODER" else "INTEGRATING"),
+        )
+
+    def test_rejects_windows_unsafe_packet_components_for_all_supervised_roles(self) -> None:
+        builders = {
+            "CODER": supervised_handoff.build_supervised_coder_handoff_preview,
+            "REVIEWER": supervised_handoff.build_supervised_reviewer_handoff_preview,
+        }
+
+        for role, builder in builders.items():
+            for unsafe_path in self.WINDOWS_UNSAFE_PATHS:
+                with self.subTest(role=role, unsafe_path=unsafe_path):
+                    packet = generate_task_packet(role, valid_intake(), valid_policy_result())
+                    packet["relevant_paths"] = [unsafe_path]
+
+                    with self.assertRaisesRegex(ValueError, "relevant path"):
+                        builder(packet)
+
+    def test_rejects_windows_unsafe_result_components_for_all_supervised_roles(self) -> None:
+        builders = {
+            "CODER": supervised_handoff.build_supervised_coder_result_receipt_preview,
+            "REVIEWER": supervised_handoff.build_supervised_reviewer_result_receipt_preview,
+        }
+
+        for role, builder in builders.items():
+            packet = generate_task_packet(role, valid_intake(), valid_policy_result())
+            for field_name in ("changed_files", "created_files"):
+                for unsafe_path in self.WINDOWS_UNSAFE_PATHS:
+                    with self.subTest(
+                        role=role,
+                        field_name=field_name,
+                        unsafe_path=unsafe_path,
+                    ):
+                        agent_result = self._result(packet, role)
+                        agent_result[field_name] = [unsafe_path]
+
+                        with self.assertRaisesRegex(ValueError, "result path"):
+                            builder(packet, agent_result)
+
+
 if __name__ == "__main__":
     unittest.main()

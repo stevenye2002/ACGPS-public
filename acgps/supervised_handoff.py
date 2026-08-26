@@ -8,6 +8,41 @@ from acgps.contracts import validate_contract
 from acgps.workflow_contracts import canonical_json_bytes
 
 
+_WINDOWS_FORBIDDEN_FILENAME_CHARACTERS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_DEVICE_NAMES = frozenset(
+    {
+        "aux",
+        "clock$",
+        "con",
+        "conin$",
+        "conout$",
+        "nul",
+        "prn",
+        *(f"com{number}" for number in range(1, 10)),
+        *(f"lpt{number}" for number in range(1, 10)),
+        "com¹",
+        "com²",
+        "com³",
+        "lpt¹",
+        "lpt²",
+        "lpt³",
+    }
+)
+
+
+def _is_unsafe_windows_component(segment: str) -> bool:
+    device_stem = segment.split(".", 1)[0].rstrip(" ").casefold()
+    return (
+        segment.endswith((".", " "))
+        or any(
+            ord(character) < 32
+            or character in _WINDOWS_FORBIDDEN_FILENAME_CHARACTERS
+            for character in segment
+        )
+        or device_stem in _WINDOWS_RESERVED_DEVICE_NAMES
+    )
+
+
 def _validate_safe_relative_paths(paths: list[str], *, label: str) -> None:
     for value in paths:
         segments = value.split("/")
@@ -18,6 +53,7 @@ def _validate_safe_relative_paths(paths: list[str], *, label: str) -> None:
             or windows_path.is_absolute()
             or bool(windows_path.drive)
             or any(segment in {"", ".", ".."} for segment in segments)
+            or any(_is_unsafe_windows_component(segment) for segment in segments)
         ):
             raise ValueError(f"{label} must be a safe relative POSIX path: {value}")
 
