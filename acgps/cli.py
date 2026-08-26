@@ -13,6 +13,8 @@ from acgps.review_adapter import build_release_candidate_manifest, verify_releas
 from acgps.supervised_handoff import (
     build_supervised_coder_handoff_preview,
     build_supervised_coder_result_receipt_preview,
+    build_supervised_reviewer_handoff_preview,
+    build_supervised_reviewer_result_receipt_preview,
 )
 from acgps.task_packets import generate_task_packet
 from acgps.workflow_engine import WorkflowEngine
@@ -169,6 +171,14 @@ def _build_parser() -> argparse.ArgumentParser:
     coding_result_receipt_preview = coding_commands.add_parser("result-receipt-preview")
     coding_result_receipt_preview.add_argument("--packet", required=True)
     coding_result_receipt_preview.add_argument("--result", required=True)
+
+    review = commands.add_parser("review")
+    review_commands = review.add_subparsers(dest="command", required=True)
+    review_handoff_preview = review_commands.add_parser("handoff-preview")
+    review_handoff_preview.add_argument("--packet", required=True)
+    review_result_receipt_preview = review_commands.add_parser("result-receipt-preview")
+    review_result_receipt_preview.add_argument("--packet", required=True)
+    review_result_receipt_preview.add_argument("--result", required=True)
     return parser
 
 
@@ -305,6 +315,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         packet = _read_canonical_json_mapping(Path(args.packet))
         agent_result = _read_canonical_json_mapping(Path(args.result))
         return build_supervised_coder_result_receipt_preview(packet, agent_result)
+
+    if args.group == "review" and args.command == "handoff-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        return build_supervised_reviewer_handoff_preview(packet)
+
+    if args.group == "review" and args.command == "result-receipt-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        agent_result = _read_canonical_json_mapping(Path(args.result))
+        return build_supervised_reviewer_result_receipt_preview(packet, agent_result)
 
     raise ValueError("unsupported command")
 

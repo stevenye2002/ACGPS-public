@@ -26,12 +26,16 @@ def _validate_relevant_paths(paths: list[str]) -> None:
     _validate_safe_relative_paths(paths, label="relevant path")
 
 
-def build_supervised_coder_handoff_preview(packet: dict[str, Any]) -> dict[str, Any]:
-    """Return a validated, non-authoritative preview for a human-supervised coder."""
-
+def _build_supervised_handoff_preview(
+    packet: dict[str, Any],
+    *,
+    role: str,
+) -> dict[str, Any]:
     validate_contract("agent_task_contract", packet, mode="runtime")
-    if packet["role"] != "CODER":
-        raise ValueError("supervised coder handoff requires a CODER task packet")
+    if packet["role"] != role:
+        raise ValueError(
+            f"supervised {role.casefold()} handoff requires a {role} task packet"
+        )
     _validate_relevant_paths(packet["relevant_paths"])
 
     return {
@@ -48,19 +52,33 @@ def build_supervised_coder_handoff_preview(packet: dict[str, Any]) -> dict[str, 
     }
 
 
-def build_supervised_coder_result_receipt_preview(
+def build_supervised_coder_handoff_preview(packet: dict[str, Any]) -> dict[str, Any]:
+    """Return a validated, non-authoritative preview for a human-supervised coder."""
+
+    return _build_supervised_handoff_preview(packet, role="CODER")
+
+
+def build_supervised_reviewer_handoff_preview(packet: dict[str, Any]) -> dict[str, Any]:
+    """Return a validated, non-authoritative preview for a human-supervised reviewer."""
+
+    return _build_supervised_handoff_preview(packet, role="REVIEWER")
+
+
+def _build_supervised_result_receipt_preview(
     packet: dict[str, Any],
     agent_result: dict[str, Any],
+    *,
+    role: str,
 ) -> dict[str, Any]:
-    """Return a validated, non-authoritative result receipt preview."""
-
     validate_contract("agent_task_contract", packet, mode="runtime")
     validate_contract("agent_result", agent_result, mode="runtime")
     _validate_relevant_paths(packet["relevant_paths"])
-    if packet["role"] != "CODER" or agent_result["role"] != "CODER":
-        raise ValueError("supervised coder result receipt requires CODER records")
+    if packet["role"] != role or agent_result["role"] != role:
+        raise ValueError(
+            f"supervised {role.casefold()} result receipt requires {role} records"
+        )
     if agent_result["packet_id"] != packet["packet_id"]:
-        raise ValueError("agent result packet_id does not match the CODER packet")
+        raise ValueError(f"agent result packet_id does not match the {role} packet")
     _validate_safe_relative_paths(
         [*agent_result["changed_files"], *agent_result["created_files"]],
         label="result path",
@@ -83,3 +101,25 @@ def build_supervised_coder_result_receipt_preview(
         "packet_sha256": hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
         "status": "RESULT_RECEIPT_PREVIEW",
     }
+
+
+def build_supervised_coder_result_receipt_preview(
+    packet: dict[str, Any],
+    agent_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a validated, non-authoritative result receipt preview."""
+
+    return _build_supervised_result_receipt_preview(packet, agent_result, role="CODER")
+
+
+def build_supervised_reviewer_result_receipt_preview(
+    packet: dict[str, Any],
+    agent_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a validated, non-authoritative reviewer result receipt preview."""
+
+    return _build_supervised_result_receipt_preview(
+        packet,
+        agent_result,
+        role="REVIEWER",
+    )

@@ -461,6 +461,55 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_validated_reviewer_handoff_without_state_writes(self) -> None:
+        packet = generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
+        packet_path = self.state_root / "reviewer-packet.json"
+        packet_path.write_bytes(canonical_json_bytes(packet) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run("review", "handoff-preview", "--packet", str(packet_path))
+
+        self.assertEqual(result["status"], "HANDOFF_PREVIEW")
+        self.assertEqual(result["packet"], packet)
+        self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_previews_validated_reviewer_result_receipt_without_state_writes(self) -> None:
+        packet = generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
+        agent_result = dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="REVIEWER",
+            changed_files=[],
+            recommended_next_state="INTEGRATING",
+        )
+        packet_path = self.state_root / "reviewer-packet.json"
+        result_path = self.state_root / "reviewer-result.json"
+        packet_path.write_bytes(canonical_json_bytes(packet) + b"\n")
+        result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "review",
+            "result-receipt-preview",
+            "--packet",
+            str(packet_path),
+            "--result",
+            str(result_path),
+        )
+
+        self.assertEqual(result["status"], "RESULT_RECEIPT_PREVIEW")
+        self.assertEqual(result["agent_result"], agent_result)
+        self.assertEqual(
+            result["agent_result_sha256"],
+            hashlib.sha256(canonical_json_bytes(agent_result)).hexdigest(),
+        )
+        self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_rejects_duplicate_keys_in_coding_execution_record(self) -> None:
         record_path = self.state_root / "duplicate-record.json"
         canonical = json.dumps(_valid_prelaunch_hold_coding_execution_record(), sort_keys=True)

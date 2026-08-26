@@ -79,6 +79,28 @@ Both raw evidence files are SHA-256-bound into the append-only transition audit.
 Entering `TASK_REVIEW` requests independent review; it does not verify, accept,
 release, or execute the coder's result.
 
+## Supervised reviewer preview
+
+After generating a canonical `REVIEWER` task packet, an operator can validate
+and preview the handoff without launching a model or writing workflow state:
+
+```powershell
+python -m acgps review handoff-preview --packet path/to/reviewer-packet.json
+```
+
+When the supervised reviewer returns an `AGENT_RESULT` record, the operator can
+validate its contract, role, packet identity, and safe relative file claims:
+
+```powershell
+python -m acgps review result-receipt-preview `
+  --packet path/to/reviewer-packet.json `
+  --result path/to/reviewer-result.json
+```
+
+Both commands write only to stdout. They do not launch a process, change
+workflow state, read or accept review findings, or authorize a transition from
+`TASK_REVIEW`; those remain separate controller operations.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs
