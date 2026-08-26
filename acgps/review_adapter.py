@@ -55,6 +55,24 @@ def validate_review_findings(paths: Iterable[Path]) -> list[dict[str, Any]]:
     return records
 
 
+def validate_fix_required_findings(paths: Iterable[Path]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    accepted_blocker = False
+    for path in paths:
+        item = Path(path)
+        record = _read_mapping(item)
+        _validate_record("review_finding", record, item)
+        accepted_blocker = accepted_blocker or (
+            record["severity"] in {"P0", "P1"}
+            and record["status"] in {"OPEN", "IN_PROGRESS"}
+            and record["disposition"] in {"ACCEPTED", "PARTIAL"}
+        )
+        records.append(record)
+    if not accepted_blocker:
+        raise ReviewEvidenceError("FIX_REQUIRED requires an accepted open P0 or P1 review finding")
+    return records
+
+
 def build_release_candidate_manifest(
     *,
     output_dir: Path,

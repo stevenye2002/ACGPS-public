@@ -23,6 +23,11 @@ from acgps.workflow_store import (
     safe_state_path,
     write_state_atomic,
 )
+from tests.test_contracts import (
+    _valid_attempt_hold_coding_execution_record,
+    _valid_candidate_ready_coding_execution_record,
+    _valid_prelaunch_hold_coding_execution_record,
+)
 
 
 def canonical_sha(record: object) -> str:
@@ -1573,6 +1578,273 @@ class WorkflowStoreTests(unittest.TestCase):
             self.assertEqual(conflict.exception.issue.code, "WORKFLOW_IDEMPOTENCY_CONFLICT")
             self.assertEqual(proof_path.read_bytes(), before)
             self.assertEqual(read_idempotency_record(store.state_root, "task-1", "INITIALIZATION", "idem-1"), planner_record)
+
+    def test_coding_execution_slot_atomically_installs_one_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            initialized = store.initialize_coding_execution_slot("GATE-1", "TASK-1")
+            self.assertEqual(
+                initialized,
+                {
+                    "gate_id": "GATE-1",
+                    "task_id": "TASK-1",
+                    "gate_binding": None,
+                    "state": "EMPTY",
+                    "remaining_attempts": 2,
+                    "active_candidate_id": None,
+                    "historical_candidate_ids": [],
+                    "remediation_authorization_id": None,
+                    "reserved_attempt": None,
+                },
+            )
+
+            reservation = store.reserve_coding_execution_attempt(
+                "GATE-1",
+                kind="ORDINARY",
+                parent_candidate_id=None,
+                reserved_at_utc="2026-08-24T00:00:00.000Z",
+            )
+            self.assertEqual(reservation["number"], 1)
+            self.assertEqual(reservation["remaining_after"], 1)
+
+            record = _valid_candidate_ready_coding_execution_record()
+            published = store.publish_coding_execution_record(record)
+            self.assertEqual(published["state"], "FROZEN_REVIEW_V1")
+            self.assertEqual(published["active_candidate_id"], "CANDIDATE-1")
+            self.assertEqual(published["remaining_attempts"], 1)
+            self.assertIsNone(published["reserved_attempt"])
+            self.assertEqual(store.read_coding_execution_record("GATE-1", "EXECUTION-1"), record)
+
+            replay = store.publish_coding_execution_record(record)
+            self.assertEqual(replay, published)
+
+            conflicting = _valid_candidate_ready_coding_execution_record()
+            conflicting["execution_id"] = "EXECUTION-2"
+            candidate = conflicting["candidate"]
+            slot = conflicting["slot"]
+            assert isinstance(candidate, dict) and isinstance(slot, dict)
+            candidate["candidate_id"] = "CANDIDATE-2"
+            slot["active_candidate_after"] = "CANDIDATE-2"
+            with self.assertRaises(WorkflowStoreError):
+                store.publish_coding_execution_record(conflicting)
+
+            unchanged = store.read_coding_execution_slot("GATE-1")
+            self.assertEqual(unchanged["active_candidate_id"], "CANDIDATE-1")
+            self.assertEqual(unchanged["remaining_attempts"], 1)
+
+    def test_coding_execution_prelaunch_hold_does_not_consume_attempt_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            before = store.initialize_coding_execution_slot("GATE-1", "TASK-1")
+            record = _valid_prelaunch_hold_coding_execution_record()
+
+            after = store.publish_coding_execution_record(record)
+
+            self.assertEqual(after["state"], before["state"])
+            self.assertEqual(after["remaining_attempts"], 2)
+            self.assertIsNone(after["reserved_attempt"])
+            self.assertEqual(store.read_coding_execution_record("GATE-1", "EXECUTION-1"), record)
+
+    def test_coding_execution_attempt_budget_is_absolute(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            store.initialize_coding_execution_slot("GATE-1", "TASK-1")
+
+            for number, before, after in ((1, 2, 1), (2, 1, 0)):
+                reservation = store.reserve_coding_execution_attempt(
+                    "GATE-1",
+                    kind="ORDINARY",
+                    parent_candidate_id=None,
+                    reserved_at_utc=f"2026-08-24T00:00:0{number}.000Z",
+                )
+                self.assertEqual(reservation["number"], number)
+                self.assertEqual(reservation["remaining_before"], before)
+                self.assertEqual(reservation["remaining_after"], after)
+
+                record = _valid_candidate_ready_coding_execution_record()
+                record["execution_id"] = f"EXECUTION-{number}"
+                attempt = record["attempt"]
+                slot = record["slot"]
+                agent_result = record["agent_result"]
+                candidate = record["candidate"]
+                assert isinstance(attempt, dict)
+                assert isinstance(slot, dict)
+                assert isinstance(agent_result, dict)
+                assert isinstance(candidate, dict)
+                attempt.update(
+                    {
+                        "number": number,
+                        "reserved_at_utc": f"2026-08-24T00:00:0{number}.000Z",
+                        "remaining_before": before,
+                        "remaining_after": after,
+                    }
+                )
+                slot.update(
+                    {
+                        "state_before": "EMPTY",
+                        "state_after": "EMPTY",
+                        "active_candidate_after": None,
+                    }
+                )
+                agent_result["claimed_status"] = "BLOCKED"
+                candidate.update(
+                    {
+                        "candidate_id": None,
+                        "version": None,
+                        "status": "NONE",
+                        "diff_sha256": None,
+                        "file_set_sha256": None,
+                        "checks_sha256": None,
+                        "promotion_predicates_passed": False,
+                    }
+                )
+                record["outcome"] = "ATTEMPT_HOLD"
+                store.publish_coding_execution_record(record)
+
+            with self.assertRaises(WorkflowStoreError) as raised:
+                store.reserve_coding_execution_attempt(
+                    "GATE-1",
+                    kind="ORDINARY",
+                    parent_candidate_id=None,
+                    reserved_at_utc="2026-08-24T00:00:03.000Z",
+                )
+            self.assertEqual(raised.exception.issue.code, "WORKFLOW_BUDGET_EXHAUSTED")
+            self.assertEqual(store.read_coding_execution_slot("GATE-1")["remaining_attempts"], 0)
+
+    def test_coding_execution_gate_rejects_identity_drift_between_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            store.initialize_coding_execution_slot("GATE-1", "TASK-1")
+            store.reserve_coding_execution_attempt(
+                "GATE-1",
+                kind="ORDINARY",
+                parent_candidate_id=None,
+                reserved_at_utc="2026-08-24T00:00:00.000Z",
+            )
+            first = _valid_attempt_hold_coding_execution_record()
+            store.publish_coding_execution_record(first)
+            store.reserve_coding_execution_attempt(
+                "GATE-1",
+                kind="ORDINARY",
+                parent_candidate_id=None,
+                reserved_at_utc="2026-08-24T00:01:00.000Z",
+            )
+            drifted = _valid_attempt_hold_coding_execution_record()
+            drifted["execution_id"] = "EXECUTION-2"
+            attempt = drifted["attempt"]
+            baseline = drifted["baseline"]
+            assert isinstance(attempt, dict) and isinstance(baseline, dict)
+            attempt.update(
+                {
+                    "number": 2,
+                    "reserved_at_utc": "2026-08-24T00:01:00.000Z",
+                    "remaining_before": 1,
+                    "remaining_after": 0,
+                }
+            )
+            baseline["repository_path"] = r"D:\other\repository"
+
+            with self.assertRaises(WorkflowStoreError):
+                store.publish_coding_execution_record(drifted)
+
+    def test_coding_execution_remediation_requires_explicit_candidate_retirement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            store.initialize_coding_execution_slot("GATE-1", "TASK-1")
+            store.reserve_coding_execution_attempt(
+                "GATE-1",
+                kind="ORDINARY",
+                parent_candidate_id=None,
+                reserved_at_utc="2026-08-24T00:00:00.000Z",
+            )
+            store.publish_coding_execution_record(_valid_candidate_ready_coding_execution_record())
+
+            with self.assertRaises(WorkflowStoreError):
+                store.reserve_coding_execution_attempt(
+                    "GATE-1",
+                    kind="REMEDIATION",
+                    parent_candidate_id="CANDIDATE-1",
+                    reserved_at_utc="2026-08-24T00:01:00.000Z",
+                )
+
+            retired = store.retire_coding_execution_candidate_for_remediation(
+                "GATE-1",
+                "CANDIDATE-1",
+                authorization_id="AUTH-REMEDIATION-1",
+            )
+            self.assertEqual(retired["state"], "EMPTY_FOR_REMEDIATION")
+            self.assertIsNone(retired["active_candidate_id"])
+            self.assertEqual(retired["historical_candidate_ids"], ["CANDIDATE-1"])
+            self.assertEqual(retired["remediation_authorization_id"], "AUTH-REMEDIATION-1")
+
+            reservation = store.reserve_coding_execution_attempt(
+                "GATE-1",
+                kind="REMEDIATION",
+                parent_candidate_id="CANDIDATE-1",
+                reserved_at_utc="2026-08-24T00:01:00.000Z",
+            )
+            self.assertEqual(reservation["number"], 2)
+            self.assertEqual(reservation["remaining_after"], 0)
+            self.assertEqual(reservation["parent_candidate_id"], "CANDIDATE-1")
+
+            record = _valid_candidate_ready_coding_execution_record()
+            record["execution_id"] = "EXECUTION-2"
+            attempt = record["attempt"]
+            slot = record["slot"]
+            candidate = record["candidate"]
+            assert isinstance(attempt, dict) and isinstance(slot, dict) and isinstance(candidate, dict)
+            attempt.update(
+                {
+                    "number": 2,
+                    "reserved_at_utc": "2026-08-24T00:01:00.000Z",
+                    "parent_candidate_id": "CANDIDATE-1",
+                    "kind": "REMEDIATION",
+                    "remaining_before": 1,
+                    "remaining_after": 0,
+                }
+            )
+            slot.update(
+                {
+                    "state_before": "EMPTY_FOR_REMEDIATION",
+                    "state_after": "FROZEN_REVIEW_V2",
+                    "active_candidate_before": None,
+                    "active_candidate_after": "CANDIDATE-2",
+                    "historical_candidate_ids": ["CANDIDATE-1"],
+                }
+            )
+            candidate.update(
+                {
+                    "candidate_id": "CANDIDATE-2",
+                    "version": 2,
+                    "parent_candidate_id": "CANDIDATE-1",
+                }
+            )
+            published = store.publish_coding_execution_record(record)
+            self.assertEqual(published["state"], "FROZEN_REVIEW_V2")
+            self.assertEqual(published["active_candidate_id"], "CANDIDATE-2")
+            self.assertEqual(published["remaining_attempts"], 0)
+
+    def test_coding_execution_publication_failure_preserves_reserved_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            store.initialize_coding_execution_slot("GATE-1", "TASK-1")
+            store.reserve_coding_execution_attempt(
+                "GATE-1",
+                kind="ORDINARY",
+                parent_candidate_id=None,
+                reserved_at_utc="2026-08-24T00:00:00.000Z",
+            )
+
+            with patch("acgps.workflow_store.write_state_atomic", side_effect=OSError("publication denied")):
+                with self.assertRaises(OSError):
+                    store.publish_coding_execution_record(_valid_candidate_ready_coding_execution_record())
+
+            state = store.read_coding_execution_slot("GATE-1")
+            self.assertEqual(state["state"], "EMPTY")
+            self.assertEqual(state["remaining_attempts"], 1)
+            self.assertEqual(state["reserved_attempt"]["number"], 1)
+            with self.assertRaises(WorkflowStoreError):
+                store.read_coding_execution_record("GATE-1", "EXECUTION-1")
 
 
 if __name__ == "__main__":

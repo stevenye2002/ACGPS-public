@@ -11,6 +11,8 @@ import tempfile
 import unittest
 
 from acgps.contracts import validate_contract
+from acgps.workflow_contracts import canonical_json_bytes
+from tests.test_contracts import _valid_prelaunch_hold_coding_execution_record
 
 
 def valid_intake() -> dict[str, object]:
@@ -308,6 +310,20 @@ class MVPCLITests(unittest.TestCase):
             if path.is_file()
         ]
 
+    @staticmethod
+    def _state_root_identity(root: Path) -> list[tuple[str, int, int, int, bytes | None]]:
+        paths = [root, *sorted(root.rglob("*"), key=lambda item: item.as_posix())]
+        return [
+            (
+                "." if path == root else path.relative_to(root).as_posix(),
+                path.lstat().st_mode,
+                path.lstat().st_size,
+                path.lstat().st_mtime_ns,
+                path.read_bytes() if path.is_file() else None,
+            )
+            for path in paths
+        ]
+
     def _run(self, *arguments: str, expected_exit: int = 0) -> dict[str, object]:
         completed = subprocess.run(
             [sys.executable, "-m", "acgps", *arguments],
@@ -337,6 +353,261 @@ class MVPCLITests(unittest.TestCase):
             "--profile-id",
             "ftic-v1",
         ]
+
+    def test_cli_initializes_and_reads_bounded_coding_gate(self) -> None:
+        initialized = self._run(
+            "coding",
+            "gate-init",
+            "--state-root",
+            str(self.state_root),
+            "--gate-id",
+            "GATE-1",
+            "--task-id",
+            "TASK-1",
+        )
+        self.assertEqual(initialized["state"], "EMPTY")
+        self.assertEqual(initialized["remaining_attempts"], 2)
+
+        status = self._run(
+            "coding",
+            "gate-status",
+            "--state-root",
+            str(self.state_root),
+            "--gate-id",
+            "GATE-1",
+        )
+        self.assertEqual(status, initialized)
+
+    def test_cli_validates_coding_execution_record_without_publishing_it(self) -> None:
+        record_path = self.state_root / "record.json"
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_bytes(
+            canonical_json_bytes(_valid_prelaunch_hold_coding_execution_record()) + b"\n"
+        )
+
+        result = self._run("coding", "record-validate", "--record", str(record_path))
+
+        self.assertEqual(result["status"], "VALID")
+        self.assertEqual(result["execution_id"], "EXECUTION-1")
+        self.assertFalse((self.state_root / "coding-execution").exists())
+
+    def test_cli_rejects_duplicate_keys_in_coding_execution_record(self) -> None:
+        record_path = self.state_root / "duplicate-record.json"
+        canonical = json.dumps(_valid_prelaunch_hold_coding_execution_record(), sort_keys=True)
+        record_path.write_text(
+            canonical.replace('{"agent_result":', '{"schema_version":2,"agent_result":', 1) + "\n",
+            encoding="utf-8",
+        )
+
+        result = self._run("coding", "record-validate", "--record", str(record_path), expected_exit=2)
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("duplicate", result["error"].casefold())
+
+    def test_cli_lists_pending_human_decisions_before_and_after_resume(self) -> None:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            self._run(
+                "task",
+                "advance",
+                *self._engine_arguments(),
+                "--task-id",
+                "ftic-governance-1",
+                "--to-state",
+                target,
+                "--actor",
+                "CONTROLLER",
+                "--created-at-utc",
+                f"2026-08-23T04:0{index}:00Z",
+                "--evidence",
+                str(evidence),
+            )
+
+        waiting = self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "SPEC_READY",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-23T04:03:00Z",
+            "--evidence",
+            str(evidence),
+            "--human-trigger",
+            "H1_PRODUCT_INTENT",
+        )
+        decision_id = str(waiting["pending_decision_id"])
+
+        state_before_pending_query = self._state_root_identity(self.state_root)
+        pending = self._run("decision", "pending", "--state-root", str(self.state_root))
+        self.assertEqual(pending["status"], "PENDING")
+        self.assertEqual([row["decision_id"] for row in pending["decisions"]], [decision_id])
+        self.assertEqual(self._state_root_identity(self.state_root), state_before_pending_query)
+
+        resolution = {
+            "schema_version": 1,
+            "decision_id": decision_id,
+            "project_id": "FTIC",
+            "task_id": "ftic-governance-1",
+            "selected_option": "RESUME",
+            "resolved_by": "human_owner",
+            "resolved_at_utc": "2026-08-23T04:04:00Z",
+            "rationale": "Continue the approved supervised core workflow.",
+            "evidence_paths": [],
+            "resume_state": "SPEC_READY",
+            "status": "RESOLVED",
+        }
+        resolution_path = self.state_root / "decision-resolution.json"
+        resolution_path.write_text(
+            json.dumps(resolution, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        from acgps.human_decisions import DecisionQueue
+
+        DecisionQueue(self.state_root / "decisions").resolve(resolution)
+        still_pending = self._run("decision", "pending", "--state-root", str(self.state_root))
+        self.assertEqual(still_pending["status"], "PENDING")
+        self.assertEqual([row["decision_id"] for row in still_pending["decisions"]], [decision_id])
+        resumed = self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "SPEC_READY",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-23T04:04:00Z",
+            "--evidence",
+            str(evidence),
+            "--decision-resolution",
+            str(resolution_path),
+        )
+        self.assertEqual(resumed["current_state"], "SPEC_READY")
+
+        cleared = self._run("decision", "pending", "--state-root", str(self.state_root))
+        self.assertEqual(cleared, {"decisions": [], "status": "CLEAR"})
+
+    def test_cli_rejects_pending_query_without_authoritative_control_store(self) -> None:
+        result = self._run(
+            "decision",
+            "pending",
+            "--state-root",
+            str(self.state_root),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertRegex(result["error"], r"control[-_]store")
+
+    def test_cli_rejects_invalid_pending_human_decision_record(self) -> None:
+        from acgps.workflow_store import WorkflowStore
+
+        WorkflowStore(self.state_root)
+        pending_root = self.state_root / "decisions" / "pending"
+        pending_root.mkdir(parents=True)
+        (pending_root / "decision-invalid.json").write_text(
+            json.dumps({"decision_id": "decision-invalid"}) + "\n",
+            encoding="utf-8",
+        )
+
+        result = self._run(
+            "decision",
+            "pending",
+            "--state-root",
+            str(self.state_root),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("human_decision_request", result["error"])
+
+    def test_cli_rejects_pending_directory_that_escapes_state_root(self) -> None:
+        from acgps.workflow_store import WorkflowStore
+
+        WorkflowStore(self.state_root)
+        outside_pending = Path(self.temporary_directory.name) / "outside-pending"
+        outside_pending.mkdir()
+        (outside_pending / "decision-1.json").write_text(
+            json.dumps(valid_decision_request(), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        decision_root = self.state_root / "decisions"
+        decision_root.mkdir()
+        os.symlink(outside_pending, decision_root / "pending", target_is_directory=True)
+
+        result = self._run(
+            "decision",
+            "pending",
+            "--state-root",
+            str(self.state_root),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertRegex(result["error"], r"symlink|escape")
+
+    def test_cli_rejects_corrupt_resolution_instead_of_reporting_clear(self) -> None:
+        from acgps.workflow_store import WorkflowStore
+
+        WorkflowStore(self.state_root)
+        decision_root = self.state_root / "decisions"
+        pending_root = decision_root / "pending"
+        resolved_root = decision_root / "resolved"
+        pending_root.mkdir(parents=True)
+        resolved_root.mkdir()
+        (pending_root / "decision-1.json").write_text(
+            json.dumps(valid_decision_request(), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (resolved_root / "decision-1.json").write_text("", encoding="utf-8")
+
+        result = self._run(
+            "decision",
+            "pending",
+            "--state-root",
+            str(self.state_root),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("unreadable", result["error"])
+
+    def test_cli_rejects_non_pending_request_in_pending_directory(self) -> None:
+        from acgps.workflow_store import WorkflowStore
+
+        WorkflowStore(self.state_root)
+        pending_root = self.state_root / "decisions" / "pending"
+        pending_root.mkdir(parents=True)
+        (pending_root / "decision-1.json").write_text(
+            json.dumps(dict(valid_decision_request(), status="CANCELLED"), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        result = self._run(
+            "decision",
+            "pending",
+            "--state-root",
+            str(self.state_root),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("must be PENDING", result["error"])
 
     def test_cli_runs_bounded_ftic_governance_slice_without_managed_writes(self) -> None:
         validation = self._run(

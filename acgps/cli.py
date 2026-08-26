@@ -6,11 +6,19 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from acgps.contracts import validate_contract
+from acgps.human_decisions import DecisionQueue
 from acgps.policy import evaluate_policy, load_policy_bundle, validate_project_registration
 from acgps.review_adapter import build_release_candidate_manifest, verify_release_candidate_manifest
 from acgps.task_packets import generate_task_packet
 from acgps.workflow_engine import WorkflowEngine
-from acgps.workflow_store import safe_state_path, write_state_atomic
+from acgps.workflow_contracts import canonical_json_bytes
+from acgps.workflow_store import (
+    WorkflowStore,
+    WorkflowStoreError,
+    safe_state_path,
+    write_state_atomic,
+)
 from acgps.yaml_loader import load_yaml_strict
 
 
@@ -23,6 +31,32 @@ def _read_mapping(path: Path) -> dict[str, Any]:
         record = load_yaml_strict(text, logical_path=str(source))
     if not isinstance(record, dict):
         raise ValueError(f"record must be a mapping: {source}")
+    return record
+
+
+def _read_canonical_json_mapping(path: Path) -> dict[str, Any]:
+    source = Path(path)
+    payload = source.read_bytes()
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"record is not valid UTF-8: {source}") from exc
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        folded: set[str] = set()
+        for key, value in pairs:
+            if key in result or key.casefold() in folded:
+                raise ValueError(f"duplicate or case-fold-colliding JSON key: {key}")
+            result[key] = value
+            folded.add(key.casefold())
+        return result
+
+    record = json.loads(text, object_pairs_hook=reject_duplicate_pairs)
+    if not isinstance(record, dict):
+        raise ValueError(f"record must be a mapping: {source}")
+    if canonical_json_bytes(record) + b"\n" != payload:
+        raise ValueError(f"record must use canonical JSON bytes with one terminal LF: {source}")
     return record
 
 
@@ -96,6 +130,11 @@ def _build_parser() -> argparse.ArgumentParser:
     packet_generate.add_argument("--created-at-utc", required=True)
     packet_generate.add_argument("--output", required=True)
 
+    decision = commands.add_parser("decision")
+    decision_commands = decision.add_subparsers(dest="command", required=True)
+    decision_pending = decision_commands.add_parser("pending")
+    decision_pending.add_argument("--state-root", required=True)
+
     rc = commands.add_parser("rc")
     rc_commands = rc.add_subparsers(dest="command", required=True)
     rc_prepare = rc_commands.add_parser("prepare")
@@ -109,6 +148,18 @@ def _build_parser() -> argparse.ArgumentParser:
     rc_prepare.add_argument("--review", action="append", required=True)
     rc_prepare.add_argument("--rollback", required=True)
     rc_prepare.add_argument("--created-at-utc", required=True)
+
+    coding = commands.add_parser("coding")
+    coding_commands = coding.add_subparsers(dest="command", required=True)
+    coding_gate_init = coding_commands.add_parser("gate-init")
+    coding_gate_init.add_argument("--state-root", required=True)
+    coding_gate_init.add_argument("--gate-id", required=True)
+    coding_gate_init.add_argument("--task-id", required=True)
+    coding_gate_status = coding_commands.add_parser("gate-status")
+    coding_gate_status.add_argument("--state-root", required=True)
+    coding_gate_status.add_argument("--gate-id", required=True)
+    coding_record_validate = coding_commands.add_parser("record-validate")
+    coding_record_validate.add_argument("--record", required=True)
     return parser
 
 
@@ -184,6 +235,27 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         write_state_atomic(_state_output_path(Path(args.state_root), Path(args.output)), packet)
         return packet
 
+    if args.group == "decision" and args.command == "pending":
+        state_root = Path(args.state_root).resolve(strict=True)
+        if not state_root.is_dir():
+            raise ValueError("state root must be a directory")
+        workflow_store = WorkflowStore(state_root, read_only=True)
+        decision_root = state_root / "decisions"
+        if decision_root.exists():
+            resolved_decision_root = decision_root.resolve(strict=True)
+            if not resolved_decision_root.is_dir() or not resolved_decision_root.is_relative_to(state_root):
+                raise ValueError("decision root must remain beneath state root")
+        else:
+            resolved_decision_root = decision_root
+        decisions = DecisionQueue(
+            resolved_decision_root,
+            workflow_store=workflow_store,
+            create_root=False,
+        ).list_pending()
+        for decision_record in decisions:
+            validate_contract("human_decision_request", decision_record, mode="runtime")
+        return {"decisions": decisions, "status": "PENDING" if decisions else "CLEAR"}
+
     if args.group == "rc" and args.command == "prepare":
         manifest_path = build_release_candidate_manifest(
             output_dir=Path(args.output_dir),
@@ -200,6 +272,22 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         verify_release_candidate_manifest(manifest_path, require_build_artifacts=True)
         return {"status": "RC_READY", "manifest_path": str(manifest_path.resolve(strict=True))}
 
+    if args.group == "coding" and args.command == "gate-init":
+        return WorkflowStore(Path(args.state_root)).initialize_coding_execution_slot(args.gate_id, args.task_id)
+
+    if args.group == "coding" and args.command == "gate-status":
+        return WorkflowStore(Path(args.state_root)).read_coding_execution_slot(args.gate_id)
+
+    if args.group == "coding" and args.command == "record-validate":
+        record = _read_canonical_json_mapping(Path(args.record))
+        validate_contract("coding_execution_record", record)
+        return {
+            "status": "VALID",
+            "execution_id": record["execution_id"],
+            "gate_id": record["gate_id"],
+            "outcome": record["outcome"],
+        }
+
     raise ValueError("unsupported command")
 
 
@@ -208,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = _dispatch(args)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, WorkflowStoreError, json.JSONDecodeError) as exc:
         json.dump({"status": "REJECTED", "error": str(exc)}, sys.stdout, sort_keys=True)
         sys.stdout.write("\n")
         return 2

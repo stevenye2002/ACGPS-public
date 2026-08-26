@@ -203,6 +203,229 @@ VERIFICATION_CHECK_FIELDS = {
     "output_path": FieldSpec(STRING),
 }
 
+CODING_OPERATION_CLASSES = (
+    "APPROVED_FILE_PATCH",
+    "GIT_READ_ONLY_INSPECTION",
+    "LOCAL_CHECK_PROCESS",
+    "TARGETED_TEXT_SEARCH",
+    "WORKSPACE_READ",
+)
+CODING_DISABLED_SURFACES = (
+    "APPS",
+    "AUTOMATIC_RESUME",
+    "BROWSER",
+    "HOOKS",
+    "MCP",
+    "MEMORIES",
+    "MODEL_SEARCH",
+    "MULTI_AGENT",
+    "PLUGINS",
+)
+CODING_EXECUTOR_PLATFORM_PROFILES = (
+    "WINDOWS_11_X64_NTFS_PYTHON_3_13_ELEVATED_PRIVATE_DESKTOP",
+    "WINDOWS_SERVER_2022_X64_NTFS_PYTHON_3_13_ELEVATED_PRIVATE_DESKTOP",
+)
+CODING_SLOT_STATES = (
+    "EMPTY",
+    "ACTIVE_V1",
+    "FROZEN_REVIEW_V1",
+    "REJECTED_HOLD_V1",
+    "EMPTY_FOR_REMEDIATION",
+    "ACTIVE_V2",
+    "FROZEN_REVIEW_V2",
+)
+
+CODING_PACKET_FIELDS = {
+    "packet_id": FieldSpec(STRING),
+    "path": FieldSpec(STRING),
+    "sha256": FieldSpec(STRING),
+    "size_bytes": FieldSpec(int),
+    "role": FieldSpec(STRING, allowed_values=("TASK_PACKET",)),
+    "validation_status": FieldSpec(STRING, allowed_values=("PASS", "HOLD")),
+}
+CODING_BASELINE_FIELDS = {
+    "repository_path": FieldSpec(STRING),
+    "commit": FieldSpec(STRING),
+    "tree": FieldSpec(STRING),
+    "before_state_sha256": FieldSpec(STRING),
+    "after_state_sha256": FieldSpec(STRING),
+    "unchanged": FieldSpec(bool),
+}
+CODING_SLOT_FIELDS = {
+    "slot_id": FieldSpec(STRING),
+    "state_before": FieldSpec(STRING, allowed_values=CODING_SLOT_STATES),
+    "state_after": FieldSpec(STRING, allowed_values=CODING_SLOT_STATES),
+    "active_candidate_before": FieldSpec((STRING, NONE)),
+    "active_candidate_after": FieldSpec((STRING, NONE)),
+    "historical_candidate_ids": STRING_LIST,
+}
+CODING_ATTEMPT_FIELDS = {
+    "number": FieldSpec((int, NONE), allowed_values=(None, 1, 2)),
+    "reserved_at_utc": FieldSpec((STRING, NONE)),
+    "parent_candidate_id": FieldSpec((STRING, NONE)),
+    "kind": FieldSpec(STRING, allowed_values=("PRELAUNCH", "ORDINARY", "REMEDIATION")),
+    "remaining_before": FieldSpec(int, allowed_values=(0, 1, 2)),
+    "remaining_after": FieldSpec(int, allowed_values=(0, 1, 2)),
+    "process_start_request_count": FieldSpec(int),
+}
+CODING_EXECUTOR_FIELDS = {
+    "path": FieldSpec(STRING),
+    "size_bytes": FieldSpec((int, NONE)),
+    "sha256": FieldSpec((STRING, NONE)),
+    "authenticode_status": FieldSpec(STRING, allowed_values=("VALID", "INVALID", "MISSING")),
+    "signer": FieldSpec((STRING, NONE)),
+    "cli_version": FieldSpec((STRING, NONE)),
+    "identity_complete": FieldSpec(bool),
+    "argv": FieldSpec(LIST, item_type=STRING),
+    "model": FieldSpec(STRING, allowed_values=("gpt-5.6-sol",)),
+    "reasoning_effort": FieldSpec(STRING, allowed_values=("high",)),
+    "auth_mode": FieldSpec(STRING, allowed_values=("CHATGPT_SUBSCRIPTION",)),
+    "sandbox": FieldSpec(STRING, allowed_values=("ISOLATED_CLONE",)),
+    "approval_policy": FieldSpec(STRING, allowed_values=("NEVER",)),
+    "platform": FieldSpec(
+        STRING,
+        allowed_values=CODING_EXECUTOR_PLATFORM_PROFILES,
+    ),
+}
+CODING_OPERATION_ROW_FIELDS = {
+    "sequence": FieldSpec(int),
+    "class": FieldSpec(STRING, allowed_values=CODING_OPERATION_CLASSES),
+    "source": FieldSpec(
+        STRING,
+        allowed_values=("CONTROLLER_EVENT", "PROCESS_OBSERVATION", "FILESYSTEM_DIFF", "GIT_DIFF"),
+    ),
+    "event_id": FieldSpec((STRING, NONE)),
+    "executable": FieldSpec((STRING, NONE)),
+    "argv": FieldSpec(LIST, item_type=STRING),
+    "cwd": FieldSpec((STRING, NONE)),
+    "path_set": STRING_LIST,
+    "status": FieldSpec(STRING, allowed_values=("PASS", "HOLD")),
+    "evidence_sha256": FieldSpec(STRING),
+}
+CODING_CAPABILITY_FIELDS = {
+    "boundary_mode": FieldSpec(STRING, allowed_values=("FIVE_CLASS_OPERATION_AND_PROMOTION_POLICY",)),
+    "shell_identity_present": FieldSpec(bool, allowed_values=(True,)),
+    "accepted_operation_classes": FieldSpec(LIST, item_type=STRING),
+    "effective_config_sha256": FieldSpec((STRING, NONE)),
+    "automatic_resume_enabled": FieldSpec(bool, allowed_values=(False,)),
+    "hooks_enabled": FieldSpec(bool, allowed_values=(False,)),
+    "memories_enabled": FieldSpec(bool, allowed_values=(False,)),
+    "disabled_surfaces": FieldSpec(LIST, item_type=STRING),
+    "authorized_write_paths": STRING_LIST,
+    "check_allowlist_sha256": FieldSpec(STRING),
+    "git_read_allowlist_sha256": FieldSpec(STRING),
+    "network_policy_sha256": FieldSpec((STRING, NONE)),
+    "observations_complete": FieldSpec(bool),
+    "operation_rows": FieldSpec(LIST, item_fields=CODING_OPERATION_ROW_FIELDS),
+}
+CODING_CLONE_BEFORE_FIELDS = {
+    "path": FieldSpec(STRING),
+    "commit": FieldSpec(STRING),
+    "tree": FieldSpec(STRING),
+    "index_sha256": FieldSpec(STRING),
+    "status_sha256": FieldSpec(STRING),
+    "git_control_sha256": FieldSpec(STRING),
+    "file_inventory_sha256": FieldSpec(STRING),
+    "remote_count": FieldSpec(int, allowed_values=(0,)),
+    "independent_git": FieldSpec(bool, allowed_values=(True,)),
+    "detached": FieldSpec(bool, allowed_values=(True,)),
+    "clean": FieldSpec(bool, allowed_values=(True,)),
+}
+CODING_PRELAUNCH_GATE_FIELDS = {
+    "gate_id": FieldSpec(STRING, allowed_values=("P0", "P1", "P2", "P3", "P4", "P5", "P6")),
+    "status": FieldSpec(STRING, allowed_values=("PASS", "HOLD")),
+    "evidence_sha256": FieldSpec(STRING),
+    "blocker_ids": STRING_LIST,
+}
+CODING_PRELAUNCH_FIELDS = {
+    "state": FieldSpec(STRING, allowed_values=("PASS", "HOLD")),
+    "checked_at_utc": FieldSpec(STRING),
+    "gate_rows": FieldSpec(LIST, item_fields=CODING_PRELAUNCH_GATE_FIELDS),
+    "model_request_started": FieldSpec(bool),
+    "process_start_requested": FieldSpec(bool),
+    "blocker_ids": STRING_LIST,
+}
+CODING_PROCESS_FIELDS = {
+    "start_requested": FieldSpec(bool),
+    "pid": FieldSpec((int, NONE)),
+    "started_at_utc": FieldSpec((STRING, NONE)),
+    "ended_at_utc": FieldSpec((STRING, NONE)),
+    "exit_code": FieldSpec((int, NONE)),
+    "timed_out": FieldSpec(bool),
+    "cancelled": FieldSpec(bool),
+    "error": FieldSpec((STRING, NONE)),
+    "descendant_count": FieldSpec(int),
+    "all_descendants_terminated": FieldSpec(bool),
+    "stdout_sha256": FieldSpec((STRING, NONE)),
+    "stderr_sha256": FieldSpec((STRING, NONE)),
+}
+CODING_EVENT_FIELDS = {
+    "jsonl_sha256": FieldSpec((STRING, NONE)),
+    "size_bytes": FieldSpec(int),
+    "parsed_count": FieldSpec(int),
+    "unknown_count": FieldSpec(int),
+    "prohibited_count": FieldSpec(int),
+    "final_response_sha256": FieldSpec((STRING, NONE)),
+    "output_schema_valid": FieldSpec(bool),
+}
+CODING_AGENT_RESULT_FIELDS = {
+    "path": FieldSpec((STRING, NONE)),
+    "sha256": FieldSpec((STRING, NONE)),
+    "size_bytes": FieldSpec(int),
+    "contract_valid": FieldSpec(bool),
+    "claimed_status": FieldSpec(
+        (STRING, NONE),
+        allowed_values=(None, "DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED", "FAILED"),
+    ),
+    "claims_match": FieldSpec(bool),
+}
+CODING_CLONE_AFTER_FIELDS = {
+    "commit": FieldSpec(STRING),
+    "tree": FieldSpec(STRING),
+    "index_sha256": FieldSpec(STRING),
+    "status_sha256": FieldSpec(STRING),
+    "git_control_sha256": FieldSpec(STRING),
+    "file_inventory_sha256": FieldSpec(STRING),
+    "changed_paths": STRING_LIST,
+    "diff_sha256": FieldSpec(STRING),
+}
+CODING_CANDIDATE_FIELDS = {
+    "candidate_id": FieldSpec((STRING, NONE)),
+    "version": FieldSpec((int, NONE), allowed_values=(None, 1, 2)),
+    "status": FieldSpec(STRING, allowed_values=("NONE", "FROZEN_REVIEW")),
+    "parent_candidate_id": FieldSpec((STRING, NONE)),
+    "diff_sha256": FieldSpec((STRING, NONE)),
+    "file_set_sha256": FieldSpec((STRING, NONE)),
+    "checks_sha256": FieldSpec((STRING, NONE)),
+    "promotion_predicates_passed": FieldSpec(bool),
+}
+
+CODING_EXECUTION_FIELDS = {
+    "schema_version": FieldSpec(int),
+    "execution_id": FieldSpec(STRING),
+    "gate_id": FieldSpec(STRING),
+    "project_id": FieldSpec(STRING),
+    "task_id": FieldSpec(STRING),
+    "packet": FieldSpec(DICT, fields=CODING_PACKET_FIELDS),
+    "baseline": FieldSpec(DICT, fields=CODING_BASELINE_FIELDS),
+    "slot": FieldSpec(DICT, fields=CODING_SLOT_FIELDS),
+    "attempt": FieldSpec(DICT, fields=CODING_ATTEMPT_FIELDS),
+    "executor": FieldSpec(DICT, fields=CODING_EXECUTOR_FIELDS),
+    "capabilities": FieldSpec(DICT, fields=CODING_CAPABILITY_FIELDS),
+    "clone_before": FieldSpec((DICT, NONE), fields=CODING_CLONE_BEFORE_FIELDS),
+    "prelaunch": FieldSpec(DICT, fields=CODING_PRELAUNCH_FIELDS),
+    "process": FieldSpec(DICT, fields=CODING_PROCESS_FIELDS),
+    "events": FieldSpec(DICT, fields=CODING_EVENT_FIELDS),
+    "agent_result": FieldSpec(DICT, fields=CODING_AGENT_RESULT_FIELDS),
+    "clone_after": FieldSpec((DICT, NONE), fields=CODING_CLONE_AFTER_FIELDS),
+    "candidate": FieldSpec(DICT, fields=CODING_CANDIDATE_FIELDS),
+    "outcome": FieldSpec(
+        STRING,
+        allowed_values=("PRELAUNCH_HOLD", "ATTEMPT_FAILED", "ATTEMPT_HOLD", "CANDIDATE_READY"),
+    ),
+    "created_at_utc": FieldSpec(STRING),
+}
+
 
 _CONTRACTS: dict[tuple[str, int], ContractSpec] = {
     ("project_profile", 1): _contract(
@@ -466,6 +689,11 @@ _CONTRACTS: dict[tuple[str, int], ContractSpec] = {
             "status": FieldSpec(STRING, allowed_values=("RC_READY", "BLOCKED", "CLOSED")),
         },
     ),
+    ("coding_execution_record", 2): ContractSpec(
+        name="coding_execution_record",
+        version=2,
+        fields=CODING_EXECUTION_FIELDS,
+    ),
 }
 
 _CURRENT_VERSIONS: dict[str, int] = {}
@@ -631,6 +859,778 @@ def _validate_mapping(
         _validate_release_candidate_manifest(data, issues, mode)
     if spec.name == "policy_evaluation_result":
         _validate_policy_evaluation_result(data, issues)
+    if spec.name == "coding_execution_record":
+        _validate_coding_execution_record(data, issues)
+
+
+def _validate_coding_execution_record(
+    data: Mapping[str, object],
+    issues: list[ValidationIssue],
+) -> None:
+    _validate_no_casefold_key_collisions(data, "$", issues)
+
+    for field_name in ("execution_id", "gate_id", "project_id", "task_id"):
+        value = data.get(field_name)
+        if isinstance(value, str) and not _is_coding_safe_id(value):
+            issues.append(ValidationIssue(field_name, "expected uppercase SafeId"))
+
+    created_at = data.get("created_at_utc")
+    if isinstance(created_at, str) and not _is_coding_utc(created_at):
+        issues.append(ValidationIssue("created_at_utc", "expected UTC timestamp with millisecond precision"))
+
+    packet = data.get("packet")
+    baseline = data.get("baseline")
+    slot = data.get("slot")
+    attempt = data.get("attempt")
+    executor = data.get("executor")
+    capabilities = data.get("capabilities")
+    prelaunch = data.get("prelaunch")
+    process = data.get("process")
+    events = data.get("events")
+    agent_result = data.get("agent_result")
+    candidate = data.get("candidate")
+    clone_before = data.get("clone_before")
+    clone_after = data.get("clone_after")
+
+    def require_git_oid(mapping: object, field_name: str, path: str) -> None:
+        if isinstance(mapping, Mapping):
+            value = mapping.get(field_name)
+            if isinstance(value, str) and not re.fullmatch(r"[0-9a-f]{40}", value):
+                issues.append(ValidationIssue(path, "expected 40-character lowercase Git object ID"))
+
+    def require_size(mapping: object, field_name: str, path: str, *, nullable: bool = False) -> None:
+        if not isinstance(mapping, Mapping):
+            return
+        value = mapping.get(field_name)
+        if nullable and value is None:
+            return
+        if type(value) is int and not 0 <= value <= 2**63 - 1:
+            issues.append(ValidationIssue(path, "expected Size in 0..2^63-1"))
+
+    def require_count(mapping: object, field_name: str, path: str, *, nullable: bool = False) -> None:
+        if not isinstance(mapping, Mapping):
+            return
+        value = mapping.get(field_name)
+        if nullable and value is None:
+            return
+        if type(value) is int and not 0 <= value <= 2**31 - 1:
+            issues.append(ValidationIssue(path, "expected Count in 0..2^31-1"))
+
+    def require_argv(mapping: object, field_name: str, path: str, *, allow_empty: bool = False) -> None:
+        if not isinstance(mapping, Mapping):
+            return
+        value = mapping.get(field_name)
+        if not isinstance(value, list):
+            return
+        if not allow_empty and not value:
+            issues.append(ValidationIssue(path, "expected nonempty direct argument vector"))
+        if any(not isinstance(item, str) or not item or "\x00" in item for item in value):
+            issues.append(ValidationIssue(path, "argv entries must be nonempty strings without NUL"))
+
+    if isinstance(packet, Mapping):
+        packet_path = packet.get("path")
+        if isinstance(packet_path, str) and not _is_safe_relative_path(packet_path):
+            issues.append(ValidationIssue("packet.path", "expected canonical relative path"))
+        require_size(packet, "size_bytes", "packet.size_bytes")
+
+    if isinstance(baseline, Mapping):
+        repository_path = baseline.get("repository_path")
+        if isinstance(repository_path, str) and not _is_windows_absolute_path(repository_path):
+            issues.append(ValidationIssue("baseline.repository_path", "expected normalized absolute Windows path"))
+        require_git_oid(baseline, "commit", "baseline.commit")
+        require_git_oid(baseline, "tree", "baseline.tree")
+
+    if isinstance(executor, Mapping):
+        executor_path = executor.get("path")
+        if isinstance(executor_path, str) and not _is_windows_absolute_path(executor_path):
+            issues.append(ValidationIssue("executor.path", "expected normalized absolute Windows path"))
+        require_size(executor, "size_bytes", "executor.size_bytes", nullable=True)
+        require_argv(executor, "argv", "executor.argv")
+
+    for clone_name, clone in (("clone_before", clone_before), ("clone_after", clone_after)):
+        require_git_oid(clone, "commit", f"{clone_name}.commit")
+        require_git_oid(clone, "tree", f"{clone_name}.tree")
+    if isinstance(clone_before, Mapping):
+        clone_path = clone_before.get("path")
+        if isinstance(clone_path, str) and not _is_windows_absolute_path(clone_path):
+            issues.append(ValidationIssue("clone_before.path", "expected normalized absolute Windows path"))
+        require_count(clone_before, "remote_count", "clone_before.remote_count")
+
+    if isinstance(attempt, Mapping):
+        require_count(attempt, "remaining_before", "attempt.remaining_before")
+        require_count(attempt, "remaining_after", "attempt.remaining_after")
+        require_count(attempt, "process_start_request_count", "attempt.process_start_request_count")
+    if isinstance(process, Mapping):
+        require_count(process, "pid", "process.pid", nullable=True)
+        require_count(process, "descendant_count", "process.descendant_count")
+    if isinstance(events, Mapping):
+        require_size(events, "size_bytes", "events.size_bytes")
+        for field_name in ("parsed_count", "unknown_count", "prohibited_count"):
+            require_count(events, field_name, f"events.{field_name}")
+    if isinstance(agent_result, Mapping):
+        require_size(agent_result, "size_bytes", "agent_result.size_bytes")
+
+    if isinstance(capabilities, Mapping):
+        operation_rows = capabilities.get("operation_rows")
+        if isinstance(operation_rows, list):
+            for index, row in enumerate(operation_rows):
+                if not isinstance(row, Mapping):
+                    continue
+                require_count(row, "sequence", f"capabilities.operation_rows[{index}].sequence")
+                process_class = row.get("class") in {"LOCAL_CHECK_PROCESS", "GIT_READ_ONLY_INSPECTION"}
+                require_argv(
+                    row,
+                    "argv",
+                    f"capabilities.operation_rows[{index}].argv",
+                    allow_empty=not process_class,
+                )
+                for field_name in ("executable", "cwd"):
+                    value = row.get(field_name)
+                    if value is not None and isinstance(value, str) and not _is_windows_absolute_path(value):
+                        issues.append(
+                            ValidationIssue(
+                                f"capabilities.operation_rows[{index}].{field_name}",
+                                "expected normalized absolute Windows path",
+                            )
+                        )
+
+    if isinstance(packet, Mapping):
+        packet_id = packet.get("packet_id")
+        if isinstance(packet_id, str) and not _is_coding_safe_id(packet_id):
+            issues.append(ValidationIssue("packet.packet_id", "expected uppercase SafeId"))
+
+    if isinstance(baseline, Mapping):
+        before_hash = baseline.get("before_state_sha256")
+        after_hash = baseline.get("after_state_sha256")
+        expected_unchanged = isinstance(before_hash, str) and before_hash == after_hash
+        if baseline.get("unchanged") is not expected_unchanged:
+            issues.append(
+                ValidationIssue(
+                    "baseline.unchanged",
+                    "must equal before-state and after-state byte equality",
+                )
+            )
+
+    if isinstance(capabilities, Mapping):
+        if capabilities.get("accepted_operation_classes") != list(CODING_OPERATION_CLASSES):
+            issues.append(
+                ValidationIssue(
+                    "capabilities.accepted_operation_classes",
+                    "must equal the exact five-class ASCII-ordered universe",
+                )
+            )
+        if capabilities.get("disabled_surfaces") != list(CODING_DISABLED_SURFACES):
+            issues.append(
+                ValidationIssue(
+                    "capabilities.disabled_surfaces",
+                    "must equal the exact disabled-surface universe",
+                )
+            )
+        operation_rows = capabilities.get("operation_rows")
+        _validate_sorted_unique_relpaths(
+            capabilities.get("authorized_write_paths"),
+            "capabilities.authorized_write_paths",
+            issues,
+        )
+        expected_complete = all(
+            (
+                isinstance(capabilities.get("effective_config_sha256"), str),
+                isinstance(capabilities.get("network_policy_sha256"), str),
+                capabilities.get("automatic_resume_enabled") is False,
+                capabilities.get("hooks_enabled") is False,
+                capabilities.get("memories_enabled") is False,
+                capabilities.get("accepted_operation_classes") == list(CODING_OPERATION_CLASSES),
+                capabilities.get("disabled_surfaces") == list(CODING_DISABLED_SURFACES),
+            )
+        )
+        if capabilities.get("observations_complete") is not expected_complete:
+            issues.append(
+                ValidationIssue(
+                    "capabilities.observations_complete",
+                    "must equal the completeness of the recorded capability observations",
+                )
+            )
+        if isinstance(operation_rows, list):
+            patch_occurrences: list[str] = []
+            for index, row in enumerate(operation_rows):
+                if isinstance(row, Mapping) and row.get("sequence") != index:
+                    issues.append(
+                        ValidationIssue(
+                            f"capabilities.operation_rows[{index}].sequence",
+                            "must be contiguous from zero",
+                        )
+                    )
+                if isinstance(row, Mapping):
+                    _validate_sorted_unique_relpaths(
+                        row.get("path_set"),
+                        f"capabilities.operation_rows[{index}].path_set",
+                        issues,
+                    )
+                    source = row.get("source")
+                    event_id = row.get("event_id")
+                    operation_class = row.get("class")
+                    process_class = operation_class in {"LOCAL_CHECK_PROCESS", "GIT_READ_ONLY_INSPECTION"}
+                    if source in {"CONTROLLER_EVENT", "PROCESS_OBSERVATION"} and event_id is None:
+                        issues.append(
+                            ValidationIssue(
+                                f"capabilities.operation_rows[{index}].event_id",
+                                "event and process observations require an event identity",
+                            )
+                        )
+                    if source in {"FILESYSTEM_DIFF", "GIT_DIFF"} and event_id is not None:
+                        issues.append(
+                            ValidationIssue(
+                                f"capabilities.operation_rows[{index}].event_id",
+                                "derived diff rows cannot assert an event identity",
+                            )
+                        )
+                    if process_class:
+                        if not (
+                            isinstance(row.get("executable"), str)
+                            and isinstance(row.get("argv"), list)
+                            and len(row.get("argv", [])) > 0
+                            and isinstance(row.get("cwd"), str)
+                        ):
+                            issues.append(
+                                ValidationIssue(
+                                    f"capabilities.operation_rows[{index}]",
+                                    "process classes require executable, argv, and cwd",
+                                )
+                            )
+                    elif any((row.get("executable") is not None, row.get("argv") != [], row.get("cwd") is not None)):
+                        issues.append(
+                            ValidationIssue(
+                                f"capabilities.operation_rows[{index}]",
+                                "nonprocess classes require null process identity and empty argv",
+                            )
+                        )
+                    if operation_class == "APPROVED_FILE_PATCH" and isinstance(row.get("path_set"), list):
+                        patch_occurrences.extend(path for path in row["path_set"] if isinstance(path, str))
+            if len(patch_occurrences) != len(set(patch_occurrences)):
+                issues.append(
+                    ValidationIssue(
+                        "capabilities.operation_rows",
+                        "approved patch paths must have exact one-row coverage",
+                    )
+                )
+
+    if isinstance(executor, Mapping):
+        expected_complete = all(
+            (
+                isinstance(executor.get("size_bytes"), int),
+                isinstance(executor.get("sha256"), str),
+                executor.get("authenticode_status") == "VALID",
+                isinstance(executor.get("signer"), str),
+                isinstance(executor.get("cli_version"), str),
+            )
+        )
+        if executor.get("identity_complete") is not expected_complete:
+            issues.append(
+                ValidationIssue(
+                    "executor.identity_complete",
+                    "must equal completeness of the observed artifact identity",
+                )
+            )
+
+    if isinstance(prelaunch, Mapping):
+        checked_at = prelaunch.get("checked_at_utc")
+        if isinstance(checked_at, str) and not _is_coding_utc(checked_at):
+            issues.append(
+                ValidationIssue(
+                    "prelaunch.checked_at_utc",
+                    "expected UTC timestamp with millisecond precision",
+                )
+            )
+        gate_rows = prelaunch.get("gate_rows")
+        expected_gate_ids = ["P0", "P1", "P2", "P3", "P4", "P5", "P6"]
+        if not isinstance(gate_rows, list) or [
+            row.get("gate_id") if isinstance(row, Mapping) else None for row in gate_rows
+        ] != expected_gate_ids:
+            issues.append(
+                ValidationIssue(
+                    "prelaunch.gate_rows",
+                    "must contain exactly P0 through P6 in order",
+                )
+            )
+        elif prelaunch.get("state") == "PASS":
+            if any(
+                row.get("status") != "PASS" or row.get("blocker_ids") != []
+                for row in gate_rows
+                if isinstance(row, Mapping)
+            ) or prelaunch.get("blocker_ids") != []:
+                issues.append(
+                    ValidationIssue(
+                        "prelaunch.state",
+                        "PASS requires seven passing rows and no blockers",
+                    )
+                )
+
+    if isinstance(attempt, Mapping):
+        number = attempt.get("number")
+        kind = attempt.get("kind")
+        remaining_before = attempt.get("remaining_before")
+        remaining_after = attempt.get("remaining_after")
+        reserved_at = attempt.get("reserved_at_utc")
+        parent_id = attempt.get("parent_candidate_id")
+        start_count = attempt.get("process_start_request_count")
+        if kind == "PRELAUNCH":
+            if number is not None or reserved_at is not None or parent_id is not None:
+                issues.append(ValidationIssue("attempt.kind", "PRELAUNCH must not reserve an attempt"))
+            if remaining_after != remaining_before:
+                issues.append(ValidationIssue("attempt.remaining_after", "PRELAUNCH must not consume budget"))
+            if start_count != 0:
+                issues.append(ValidationIssue("attempt.process_start_request_count", "PRELAUNCH cannot request a process start"))
+        elif number in (1, 2):
+            if remaining_after != remaining_before - 1:
+                issues.append(
+                    ValidationIssue(
+                        "attempt.remaining_after",
+                        "a reserved attempt must decrement the budget exactly once",
+                    )
+                )
+            if not isinstance(reserved_at, str) or not _is_coding_utc(reserved_at):
+                issues.append(
+                    ValidationIssue(
+                        "attempt.reserved_at_utc",
+                        "a reserved attempt requires a millisecond UTC timestamp",
+                    )
+                )
+            if kind == "ORDINARY" and parent_id is not None:
+                issues.append(ValidationIssue("attempt.parent_candidate_id", "ORDINARY attempts have no parent"))
+            if kind == "REMEDIATION" and (number != 2 or not isinstance(parent_id, str)):
+                issues.append(
+                    ValidationIssue(
+                        "attempt.kind",
+                        "REMEDIATION requires Attempt 2 and a parent candidate",
+                    )
+                )
+            if start_count != 1:
+                issues.append(
+                    ValidationIssue(
+                        "attempt.process_start_request_count",
+                        "a reserved attempt requires exactly one process-start request",
+                    )
+                )
+        else:
+            issues.append(
+                ValidationIssue(
+                    "attempt.number",
+                    "attempt number is null exactly for PRELAUNCH and otherwise one or two",
+                )
+            )
+        if isinstance(start_count, int) and not 0 <= start_count <= 1:
+            issues.append(ValidationIssue("attempt.process_start_request_count", "must be zero or one"))
+
+    if isinstance(process, Mapping):
+        if process.get("start_requested") is False:
+            null_fields = (
+                "pid",
+                "started_at_utc",
+                "ended_at_utc",
+                "exit_code",
+                "error",
+                "stdout_sha256",
+                "stderr_sha256",
+            )
+            for field_name in null_fields:
+                if process.get(field_name) is not None:
+                    issues.append(
+                        ValidationIssue(
+                            f"process.{field_name}",
+                            "must be null when no process start was requested",
+                        )
+                    )
+        elif isinstance(process.get("pid"), int):
+            for field_name in ("started_at_utc", "ended_at_utc", "stdout_sha256", "stderr_sha256"):
+                if process.get(field_name) is None:
+                    issues.append(
+                        ValidationIssue(
+                            f"process.{field_name}",
+                            "must be present for a created process",
+                        )
+                    )
+            for field_name in ("started_at_utc", "ended_at_utc"):
+                value = process.get(field_name)
+                if isinstance(value, str) and not _is_coding_utc(value):
+                    issues.append(
+                        ValidationIssue(
+                            f"process.{field_name}",
+                            "expected UTC timestamp with millisecond precision",
+                        )
+                    )
+        elif process.get("start_requested") is True:
+            if process.get("error") in (None, ""):
+                issues.append(
+                    ValidationIssue(
+                        "process.error",
+                        "process creation failure requires a nonempty error",
+                    )
+                )
+            for field_name in ("started_at_utc", "ended_at_utc", "exit_code", "stdout_sha256", "stderr_sha256"):
+                if process.get(field_name) is not None:
+                    issues.append(
+                        ValidationIssue(
+                            f"process.{field_name}",
+                            "must be null when process creation fails",
+                        )
+                    )
+
+    if isinstance(clone_before, Mapping) and isinstance(clone_after, Mapping):
+        for field_name in ("commit", "tree", "git_control_sha256"):
+            if clone_after.get(field_name) != clone_before.get(field_name):
+                issues.append(
+                    ValidationIssue(
+                        f"clone_after.{field_name}",
+                        f"must equal clone_before.{field_name}",
+                    )
+                )
+
+    patch_paths: list[str] = []
+    if isinstance(capabilities, Mapping):
+        operation_rows = capabilities.get("operation_rows")
+        if isinstance(operation_rows, list):
+            for row in operation_rows:
+                if isinstance(row, Mapping) and row.get("class") == "APPROVED_FILE_PATCH":
+                    paths = row.get("path_set")
+                    if isinstance(paths, list):
+                        patch_paths.extend(path for path in paths if isinstance(path, str))
+    patch_paths = sorted(set(patch_paths))
+    if isinstance(clone_after, Mapping):
+        changed_paths = clone_after.get("changed_paths")
+        _validate_sorted_unique_relpaths(changed_paths, "clone_after.changed_paths", issues)
+        if changed_paths != patch_paths:
+            issues.append(
+                ValidationIssue(
+                    "clone_after.changed_paths",
+                    "must exactly equal paths covered by approved patch rows",
+                )
+            )
+
+    if isinstance(candidate, Mapping) and isinstance(slot, Mapping):
+        candidate_id = candidate.get("candidate_id")
+        if candidate.get("status") == "FROZEN_REVIEW" and slot.get("active_candidate_after") != candidate_id:
+            issues.append(
+                ValidationIssue(
+                    "slot.active_candidate_after",
+                    "must equal the frozen candidate identity",
+                )
+            )
+        if candidate.get("status") == "FROZEN_REVIEW":
+            version = candidate.get("version")
+            parent = candidate.get("parent_candidate_id")
+            if version == 1 and not all(
+                (
+                    parent is None,
+                    slot.get("state_before") == "EMPTY",
+                    slot.get("state_after") == "FROZEN_REVIEW_V1",
+                    slot.get("historical_candidate_ids") == [],
+                )
+            ):
+                issues.append(ValidationIssue("candidate.version", "Candidate v1 must derive from the EMPTY slot"))
+            if version == 2 and not all(
+                (
+                    isinstance(parent, str),
+                    isinstance(attempt, Mapping),
+                    attempt.get("number") == 2,
+                    attempt.get("kind") == "REMEDIATION",
+                    attempt.get("parent_candidate_id") == parent,
+                    slot.get("state_before") == "EMPTY_FOR_REMEDIATION",
+                    slot.get("state_after") == "FROZEN_REVIEW_V2",
+                    slot.get("historical_candidate_ids") == [parent],
+                )
+            ):
+                issues.append(
+                    ValidationIssue(
+                        "candidate.version",
+                        "Candidate v2 requires the sole authorized remediation transition",
+                    )
+                )
+
+    if isinstance(prelaunch, Mapping) and prelaunch.get("state") == "HOLD":
+        if prelaunch.get("model_request_started") is not False:
+            issues.append(
+                ValidationIssue(
+                    "prelaunch.model_request_started",
+                    "must be false when prelaunch state is HOLD",
+                )
+            )
+        if prelaunch.get("process_start_requested") is not False:
+            issues.append(
+                ValidationIssue(
+                    "prelaunch.process_start_requested",
+                    "must be false when prelaunch state is HOLD",
+                )
+            )
+        if isinstance(process, Mapping) and process.get("start_requested") is not False:
+            issues.append(
+                ValidationIssue(
+                    "process.start_requested",
+                    "must be false when prelaunch state is HOLD",
+                )
+            )
+
+    if (
+        isinstance(candidate, Mapping)
+        and candidate.get("status") == "FROZEN_REVIEW"
+        and isinstance(clone_after, Mapping)
+        and candidate.get("diff_sha256") != clone_after.get("diff_sha256")
+    ):
+        issues.append(
+            ValidationIssue(
+                "candidate.diff_sha256",
+                "must equal clone_after.diff_sha256",
+            )
+        )
+
+    promotion_ready = _coding_promotion_ready(
+        packet=packet,
+        baseline=baseline,
+        slot=slot,
+        attempt=attempt,
+        executor=executor,
+        capabilities=capabilities,
+        clone_before=clone_before,
+        prelaunch=prelaunch,
+        process=process,
+        events=events,
+        agent_result=agent_result,
+        clone_after=clone_after,
+        candidate=candidate,
+    )
+    if data.get("outcome") == "CANDIDATE_READY" and not promotion_ready:
+        issues.append(
+            ValidationIssue(
+                "outcome",
+                "CANDIDATE_READY requires all promotion predicates",
+            )
+        )
+    expected_outcome = _coding_expected_outcome(
+        prelaunch=prelaunch,
+        attempt=attempt,
+        process=process,
+        agent_result=agent_result,
+        promotion_ready=promotion_ready,
+    )
+    if expected_outcome is not None and data.get("outcome") != expected_outcome:
+        issues.append(
+            ValidationIssue(
+                "outcome",
+                f"must equal the derived terminal outcome {expected_outcome}",
+            )
+        )
+    if isinstance(candidate, Mapping):
+        if candidate.get("promotion_predicates_passed") is not promotion_ready:
+            issues.append(
+                ValidationIssue(
+                    "candidate.promotion_predicates_passed",
+                    "must equal the derived promotion predicate",
+                )
+            )
+        if not promotion_ready and any(
+            (
+                candidate.get("candidate_id") is not None,
+                candidate.get("version") is not None,
+                candidate.get("status") != "NONE",
+                candidate.get("parent_candidate_id") is not None,
+                candidate.get("diff_sha256") is not None,
+                candidate.get("file_set_sha256") is not None,
+                candidate.get("checks_sha256") is not None,
+            )
+        ):
+            issues.append(
+                ValidationIssue(
+                    "candidate",
+                    "non-promotable outcomes require the exact NONE candidate form",
+                )
+            )
+
+
+def _validate_no_casefold_key_collisions(
+    value: object,
+    path: str,
+    issues: list[ValidationIssue],
+) -> None:
+    if isinstance(value, Mapping):
+        seen: dict[str, str] = {}
+        for key, child in value.items():
+            if not isinstance(key, str):
+                issues.append(ValidationIssue(path, "object keys must be strings"))
+                continue
+            folded = key.casefold()
+            previous = seen.get(folded)
+            if previous is not None and previous != key:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.{key}",
+                        f"case-fold-colliding key with {previous!r}",
+                    )
+                )
+            else:
+                seen[folded] = key
+            _validate_no_casefold_key_collisions(child, f"{path}.{key}", issues)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _validate_no_casefold_key_collisions(child, f"{path}[{index}]", issues)
+
+
+def _is_coding_safe_id(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,127}", value))
+
+
+def _is_coding_utc(value: str) -> bool:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", value):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_sorted_unique_relpaths(
+    value: object,
+    path: str,
+    issues: list[ValidationIssue],
+) -> None:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return
+    if value != sorted(set(value)):
+        issues.append(ValidationIssue(path, "must be ASCII-ordered and unique"))
+    folded = [item.casefold() for item in value]
+    if len(folded) != len(set(folded)):
+        issues.append(ValidationIssue(path, "must not contain case-fold-colliding paths"))
+    for item in value:
+        if "\x00" in item or not _is_safe_relative_path(item):
+            issues.append(ValidationIssue(path, f"unsafe relative path: {item!r}"))
+
+
+def _coding_promotion_ready(
+    *,
+    packet: object,
+    baseline: object,
+    slot: object,
+    attempt: object,
+    executor: object,
+    capabilities: object,
+    clone_before: object,
+    prelaunch: object,
+    process: object,
+    events: object,
+    agent_result: object,
+    clone_after: object,
+    candidate: object,
+) -> bool:
+    mappings = (
+        packet,
+        baseline,
+        slot,
+        attempt,
+        executor,
+        capabilities,
+        clone_before,
+        prelaunch,
+        process,
+        events,
+        agent_result,
+        clone_after,
+        candidate,
+    )
+    if not all(isinstance(item, Mapping) for item in mappings):
+        return False
+    assert isinstance(packet, Mapping)
+    assert isinstance(baseline, Mapping)
+    assert isinstance(slot, Mapping)
+    assert isinstance(attempt, Mapping)
+    assert isinstance(executor, Mapping)
+    assert isinstance(capabilities, Mapping)
+    assert isinstance(clone_before, Mapping)
+    assert isinstance(prelaunch, Mapping)
+    assert isinstance(process, Mapping)
+    assert isinstance(events, Mapping)
+    assert isinstance(agent_result, Mapping)
+    assert isinstance(clone_after, Mapping)
+    assert isinstance(candidate, Mapping)
+    rows = capabilities.get("operation_rows")
+    rows_pass = isinstance(rows, list) and all(
+        isinstance(row, Mapping) and row.get("status") == "PASS" and row.get("sequence") == index
+        for index, row in enumerate(rows)
+    )
+    changed_paths = clone_after.get("changed_paths")
+    patch_paths = sorted(
+        {
+            path
+            for row in rows if isinstance(rows, list) and isinstance(row, Mapping) and row.get("class") == "APPROVED_FILE_PATCH"
+            for path in (row.get("path_set") if isinstance(row.get("path_set"), list) else [])
+            if isinstance(path, str)
+        }
+    ) if isinstance(rows, list) else []
+    return all(
+        (
+            packet.get("validation_status") == "PASS",
+            baseline.get("unchanged") is True,
+            prelaunch.get("state") == "PASS",
+            attempt.get("number") in (1, 2),
+            attempt.get("process_start_request_count") == 1,
+            executor.get("identity_complete") is True,
+            capabilities.get("observations_complete") is True,
+            rows_pass,
+            changed_paths == patch_paths,
+            clone_before.get("commit") == clone_after.get("commit"),
+            clone_before.get("tree") == clone_after.get("tree"),
+            clone_before.get("git_control_sha256") == clone_after.get("git_control_sha256"),
+            process.get("start_requested") is True,
+            process.get("exit_code") == 0,
+            process.get("error") is None,
+            process.get("timed_out") is False,
+            process.get("cancelled") is False,
+            process.get("all_descendants_terminated") is True,
+            events.get("unknown_count") == 0,
+            events.get("prohibited_count") == 0,
+            events.get("output_schema_valid") is True,
+            agent_result.get("contract_valid") is True,
+            agent_result.get("claims_match") is True,
+            agent_result.get("claimed_status") == "DONE",
+            candidate.get("status") == "FROZEN_REVIEW",
+            candidate.get("candidate_id") == slot.get("active_candidate_after"),
+            candidate.get("diff_sha256") == clone_after.get("diff_sha256"),
+        )
+    )
+
+
+def _coding_expected_outcome(
+    *,
+    prelaunch: object,
+    attempt: object,
+    process: object,
+    agent_result: object,
+    promotion_ready: bool,
+) -> str | None:
+    if not all(isinstance(value, Mapping) for value in (prelaunch, attempt, process, agent_result)):
+        return None
+    assert isinstance(prelaunch, Mapping)
+    assert isinstance(attempt, Mapping)
+    assert isinstance(process, Mapping)
+    assert isinstance(agent_result, Mapping)
+    if prelaunch.get("state") == "HOLD":
+        return "PRELAUNCH_HOLD"
+    if attempt.get("number") not in (1, 2):
+        return None
+    process_failed = any(
+        (
+            process.get("start_requested") is not True,
+            process.get("pid") is None,
+            process.get("error") is not None,
+            process.get("timed_out") is True,
+            process.get("cancelled") is True,
+            process.get("all_descendants_terminated") is not True,
+            isinstance(process.get("exit_code"), int) and process.get("exit_code") != 0,
+        )
+    )
+    if process_failed or agent_result.get("claimed_status") == "FAILED":
+        return "ATTEMPT_FAILED"
+    if promotion_ready:
+        return "CANDIDATE_READY"
+    return "ATTEMPT_HOLD"
 
 
 def _validate_human_decision_request(
@@ -1215,7 +2215,10 @@ def _validate_runtime_semantics(
     ) and not _is_sha256(value):
         issues.append(ValidationIssue(path, "expected lowercase SHA-256 hex digest"))
 
-    if _is_path_semantic_path(path):
+    if _is_absolute_path_semantic_path(path):
+        if not _is_windows_absolute_path(value):
+            issues.append(ValidationIssue(path, "expected normalized absolute Windows path"))
+    elif _is_path_semantic_path(path):
         if not _is_safe_relative_path(value):
             issues.append(ValidationIssue(path, "expected safe relative path"))
 
@@ -1233,6 +2236,14 @@ def _is_path_semantic_path(path: str) -> bool:
     parts = _semantic_path_parts(path)
     field_name = parts[-1]
     return field_name in PATH_FIELDS or any(part in PATH_COLLECTION_FIELDS for part in parts)
+
+
+def _is_absolute_path_semantic_path(path: str) -> bool:
+    parts = _semantic_path_parts(path)
+    return len(parts) >= 2 and parts[-2:] in (
+        ["executor", "path"],
+        ["clone_before", "path"],
+    )
 
 
 def _is_required_text_field(field_name: str) -> bool:
@@ -1284,10 +2295,10 @@ def _is_required_text_field(field_name: str) -> bool:
 
 
 def _is_rfc3339_utc(value: str) -> bool:
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value):
         return False
     try:
-        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ" if "." in value else "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         return False
     return True
@@ -1303,4 +2314,11 @@ def _is_safe_relative_path(value: str) -> bool:
     if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
         return False
     parts = value.split("/")
+    return all(part not in ("", ".", "..") for part in parts)
+
+
+def _is_windows_absolute_path(value: str) -> bool:
+    if not re.fullmatch(r"[A-Za-z]:\\[^\x00]*", value):
+        return False
+    parts = value[3:].split("\\") if len(value) > 3 else []
     return all(part not in ("", ".", "..") for part in parts)

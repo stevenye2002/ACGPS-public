@@ -8,7 +8,10 @@ ACGPS sits above managed software projects. It does not own their domain logic. 
 
 ### 2.1 CLI
 
-Provides deterministic commands for project registration, task intake, status, policy evaluation, decision handling, gate checks, task-packet generation, audit inspection, and review preparation.
+Provides deterministic commands for project registration, task intake, status,
+policy evaluation, read-only pending-decision inspection, decision-bound task
+resumption, gate checks, task-packet generation, audit inspection, and review
+preparation.
 
 ### 2.2 Project Profile Loader
 
@@ -58,7 +61,11 @@ Operational state is stored under a clearly marked runtime directory and must no
 
 ## 4. Integration model
 
-v0.1 generates role task packets and commands for Codex or other agents. Direct provider API orchestration is deferred. This separates the workflow contract from any specific subscription, model, or vendor.
+v1.0 core generates role task packets and commands for supervised operators.
+The bounded coding executor remains implemented, unqualified, disabled by
+default, and outside the v1.0 core release claim. Direct autonomous model
+orchestration remains deferred, preserving separation between the workflow
+contract and any subscription, model, or vendor.
 
 ## 5. Security boundaries
 
@@ -66,6 +73,7 @@ v0.1 generates role task packets and commands for Codex or other agents. Direct 
 - Destructive commands, production writes, external communications, credentials, and release actions require explicit policy and human authorization.
 - Secrets must never enter task packets, logs, review bundles, or model prompts.
 - Managed-project commands are allow-listed by profile.
+- v1.0 core does not authorize autonomous model execution, live trading, broker credentials, or co-location with an MT4/MT5 execution boundary.
 
 ## 6. Failure behavior
 

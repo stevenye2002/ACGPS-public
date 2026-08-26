@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import platform
 import sys
 import tempfile
 
@@ -17,11 +18,27 @@ class ReleaseReadinessError(ValueError):
     pass
 
 
-def validate_supported_environment(platform_name: str, version_info: tuple[int, int, int]) -> dict[str, str]:
+def validate_supported_environment(
+    platform_name: str,
+    version_info: tuple[int, int, int],
+    windows_release: str | None = None,
+) -> dict[str, str]:
     major, minor, patch = version_info
-    if platform_name != "win32" or (major, minor) != (3, 13):
-        raise ReleaseReadinessError("ACGPS v0.1 release readiness supports only Windows with Python 3.13")
-    return {"platform": platform_name, "python": f"{major}.{minor}.{patch}"}
+    observed_windows_release = platform.release() if windows_release is None else windows_release
+    if (
+        platform_name != "win32"
+        or (major, minor) != (3, 13)
+        or observed_windows_release != "2022Server"
+    ):
+        raise ReleaseReadinessError(
+            "ACGPS v1.0 core release readiness supports only Windows Server 2022 with Python 3.13"
+        )
+    return {
+        "platform": platform_name,
+        "profile": "WINDOWS_SERVER_2022",
+        "python": f"{major}.{minor}.{patch}",
+        "windows_release": observed_windows_release,
+    }
 
 
 def evaluate_release_readiness(
@@ -56,13 +73,13 @@ def evaluate_release_readiness(
     return {
         "archive": first_result,
         "environment": environment,
-        "scope": "WINDOWS_PYTHON_3_13",
+        "scope": "WINDOWS_SERVER_2022_PYTHON_3_13_CORE_ONLY",
         "status": "RELEASE_READY",
     }
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate bounded ACGPS v0.1 release readiness.")
+    parser = argparse.ArgumentParser(description="Validate ACGPS v1.0 core-only release readiness.")
     parser.add_argument("--repo-root", default=str(ROOT))
     parser.add_argument("--archive")
     parser.add_argument("--manifest")

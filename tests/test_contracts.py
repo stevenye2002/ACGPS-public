@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 import configparser
 import unittest
@@ -19,6 +20,383 @@ except ImportError:  # pragma: no cover - exercised only in minimal environments
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _valid_prelaunch_hold_coding_execution_record() -> dict[str, object]:
+    sha_a = "a" * 64
+    sha_b = "b" * 64
+    git_a = "1" * 40
+    git_b = "2" * 40
+    blocker = "P4-CAPABILITY-INCOMPLETE"
+    gate_rows = []
+    for gate_id in ("P0", "P1", "P2", "P3", "P4", "P5", "P6"):
+        gate_rows.append(
+            {
+                "gate_id": gate_id,
+                "status": "HOLD" if gate_id == "P4" else "PASS",
+                "evidence_sha256": sha_a,
+                "blocker_ids": [blocker] if gate_id == "P4" else [],
+            }
+        )
+    return {
+        "schema_version": 2,
+        "execution_id": "EXECUTION-1",
+        "gate_id": "GATE-1",
+        "project_id": "ACGPS",
+        "task_id": "TASK-1",
+        "packet": {
+            "packet_id": "PACKET-1",
+            "path": "packets/task-1.json",
+            "sha256": sha_a,
+            "size_bytes": 512,
+            "role": "TASK_PACKET",
+            "validation_status": "PASS",
+        },
+        "baseline": {
+            "repository_path": "C:\\work\\baseline",
+            "commit": git_a,
+            "tree": git_b,
+            "before_state_sha256": sha_a,
+            "after_state_sha256": sha_a,
+            "unchanged": True,
+        },
+        "slot": {
+            "slot_id": "SLOT-1",
+            "state_before": "EMPTY",
+            "state_after": "EMPTY",
+            "active_candidate_before": None,
+            "active_candidate_after": None,
+            "historical_candidate_ids": [],
+        },
+        "attempt": {
+            "number": None,
+            "reserved_at_utc": None,
+            "parent_candidate_id": None,
+            "kind": "PRELAUNCH",
+            "remaining_before": 2,
+            "remaining_after": 2,
+            "process_start_request_count": 0,
+        },
+        "executor": {
+            "path": "C:\\tools\\codex.exe",
+            "size_bytes": None,
+            "sha256": None,
+            "authenticode_status": "MISSING",
+            "signer": None,
+            "cli_version": None,
+            "identity_complete": False,
+            "argv": ["codex", "exec"],
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "high",
+            "auth_mode": "CHATGPT_SUBSCRIPTION",
+            "sandbox": "ISOLATED_CLONE",
+            "approval_policy": "NEVER",
+            "platform": "WINDOWS_11_X64_NTFS_PYTHON_3_13_ELEVATED_PRIVATE_DESKTOP",
+        },
+        "capabilities": {
+            "boundary_mode": "FIVE_CLASS_OPERATION_AND_PROMOTION_POLICY",
+            "shell_identity_present": True,
+            "accepted_operation_classes": [
+                "APPROVED_FILE_PATCH",
+                "GIT_READ_ONLY_INSPECTION",
+                "LOCAL_CHECK_PROCESS",
+                "TARGETED_TEXT_SEARCH",
+                "WORKSPACE_READ",
+            ],
+            "effective_config_sha256": None,
+            "automatic_resume_enabled": False,
+            "hooks_enabled": False,
+            "memories_enabled": False,
+            "disabled_surfaces": [
+                "APPS",
+                "AUTOMATIC_RESUME",
+                "BROWSER",
+                "HOOKS",
+                "MCP",
+                "MEMORIES",
+                "MODEL_SEARCH",
+                "MULTI_AGENT",
+                "PLUGINS",
+            ],
+            "authorized_write_paths": ["acgps/example.py"],
+            "check_allowlist_sha256": sha_a,
+            "git_read_allowlist_sha256": sha_b,
+            "network_policy_sha256": None,
+            "observations_complete": False,
+            "operation_rows": [],
+        },
+        "clone_before": None,
+        "prelaunch": {
+            "state": "HOLD",
+            "checked_at_utc": "2026-08-24T00:00:00.000Z",
+            "gate_rows": gate_rows,
+            "model_request_started": False,
+            "process_start_requested": False,
+            "blocker_ids": [blocker],
+        },
+        "process": {
+            "start_requested": False,
+            "pid": None,
+            "started_at_utc": None,
+            "ended_at_utc": None,
+            "exit_code": None,
+            "timed_out": False,
+            "cancelled": False,
+            "error": None,
+            "descendant_count": 0,
+            "all_descendants_terminated": True,
+            "stdout_sha256": None,
+            "stderr_sha256": None,
+        },
+        "events": {
+            "jsonl_sha256": None,
+            "size_bytes": 0,
+            "parsed_count": 0,
+            "unknown_count": 0,
+            "prohibited_count": 0,
+            "final_response_sha256": None,
+            "output_schema_valid": False,
+        },
+        "agent_result": {
+            "path": None,
+            "sha256": None,
+            "size_bytes": 0,
+            "contract_valid": False,
+            "claimed_status": None,
+            "claims_match": False,
+        },
+        "clone_after": None,
+        "candidate": {
+            "candidate_id": None,
+            "version": None,
+            "status": "NONE",
+            "parent_candidate_id": None,
+            "diff_sha256": None,
+            "file_set_sha256": None,
+            "checks_sha256": None,
+            "promotion_predicates_passed": False,
+        },
+        "outcome": "PRELAUNCH_HOLD",
+        "created_at_utc": "2026-08-24T00:00:00.000Z",
+    }
+
+
+def _valid_candidate_ready_coding_execution_record() -> dict[str, object]:
+    record = deepcopy(_valid_prelaunch_hold_coding_execution_record())
+    sha_a = "a" * 64
+    sha_b = "b" * 64
+    sha_c = "c" * 64
+    git_a = "1" * 40
+    git_b = "2" * 40
+    record["slot"] = {
+        "slot_id": "SLOT-1",
+        "state_before": "EMPTY",
+        "state_after": "FROZEN_REVIEW_V1",
+        "active_candidate_before": None,
+        "active_candidate_after": "CANDIDATE-1",
+        "historical_candidate_ids": [],
+    }
+    record["attempt"] = {
+        "number": 1,
+        "reserved_at_utc": "2026-08-24T00:00:00.000Z",
+        "parent_candidate_id": None,
+        "kind": "ORDINARY",
+        "remaining_before": 2,
+        "remaining_after": 1,
+        "process_start_request_count": 1,
+    }
+    executor = record["executor"]
+    assert isinstance(executor, dict)
+    executor.update(
+        {
+            "size_bytes": 1024,
+            "sha256": sha_b,
+            "authenticode_status": "VALID",
+            "signer": "OpenAI",
+            "cli_version": "0.145.0",
+            "identity_complete": True,
+        }
+    )
+    capabilities = record["capabilities"]
+    assert isinstance(capabilities, dict)
+    capabilities.update(
+        {
+            "effective_config_sha256": sha_a,
+            "network_policy_sha256": sha_b,
+            "observations_complete": True,
+            "operation_rows": [
+                {
+                    "sequence": 0,
+                    "class": "APPROVED_FILE_PATCH",
+                    "source": "FILESYSTEM_DIFF",
+                    "event_id": None,
+                    "executable": None,
+                    "argv": [],
+                    "cwd": None,
+                    "path_set": ["acgps/example.py"],
+                    "status": "PASS",
+                    "evidence_sha256": sha_c,
+                }
+            ],
+        }
+    )
+    record["clone_before"] = {
+        "path": "C:\\work\\clone",
+        "commit": git_a,
+        "tree": git_b,
+        "index_sha256": sha_a,
+        "status_sha256": sha_b,
+        "git_control_sha256": sha_c,
+        "file_inventory_sha256": sha_a,
+        "remote_count": 0,
+        "independent_git": True,
+        "detached": True,
+        "clean": True,
+    }
+    record["prelaunch"] = {
+        "state": "PASS",
+        "checked_at_utc": "2026-08-24T00:00:00.000Z",
+        "gate_rows": [
+            {
+                "gate_id": gate_id,
+                "status": "PASS",
+                "evidence_sha256": sha_a,
+                "blocker_ids": [],
+            }
+            for gate_id in ("P0", "P1", "P2", "P3", "P4", "P5", "P6")
+        ],
+        "model_request_started": True,
+        "process_start_requested": True,
+        "blocker_ids": [],
+    }
+    record["process"] = {
+        "start_requested": True,
+        "pid": 1234,
+        "started_at_utc": "2026-08-24T00:00:01.000Z",
+        "ended_at_utc": "2026-08-24T00:01:00.000Z",
+        "exit_code": 0,
+        "timed_out": False,
+        "cancelled": False,
+        "error": None,
+        "descendant_count": 0,
+        "all_descendants_terminated": True,
+        "stdout_sha256": sha_a,
+        "stderr_sha256": sha_b,
+    }
+    record["events"] = {
+        "jsonl_sha256": sha_a,
+        "size_bytes": 128,
+        "parsed_count": 1,
+        "unknown_count": 0,
+        "prohibited_count": 0,
+        "final_response_sha256": sha_b,
+        "output_schema_valid": True,
+    }
+    record["agent_result"] = {
+        "path": "artifacts/agent-result.json",
+        "sha256": sha_a,
+        "size_bytes": 256,
+        "contract_valid": True,
+        "claimed_status": "DONE",
+        "claims_match": True,
+    }
+    record["clone_after"] = {
+        "commit": git_a,
+        "tree": git_b,
+        "index_sha256": sha_a,
+        "status_sha256": sha_b,
+        "git_control_sha256": sha_c,
+        "file_inventory_sha256": sha_b,
+        "changed_paths": ["acgps/example.py"],
+        "diff_sha256": sha_c,
+    }
+    record["candidate"] = {
+        "candidate_id": "CANDIDATE-1",
+        "version": 1,
+        "status": "FROZEN_REVIEW",
+        "parent_candidate_id": None,
+        "diff_sha256": sha_c,
+        "file_set_sha256": sha_a,
+        "checks_sha256": sha_b,
+        "promotion_predicates_passed": True,
+    }
+    record["outcome"] = "CANDIDATE_READY"
+    return record
+
+
+def _valid_attempt_failed_coding_execution_record() -> dict[str, object]:
+    record = _valid_candidate_ready_coding_execution_record()
+    record["process"] = {
+        "start_requested": True,
+        "pid": None,
+        "started_at_utc": None,
+        "ended_at_utc": None,
+        "exit_code": None,
+        "timed_out": False,
+        "cancelled": False,
+        "error": "process creation failed",
+        "descendant_count": 0,
+        "all_descendants_terminated": True,
+        "stdout_sha256": None,
+        "stderr_sha256": None,
+    }
+    record["events"] = {
+        "jsonl_sha256": None,
+        "size_bytes": 0,
+        "parsed_count": 0,
+        "unknown_count": 0,
+        "prohibited_count": 0,
+        "final_response_sha256": None,
+        "output_schema_valid": False,
+    }
+    record["agent_result"] = {
+        "path": None,
+        "sha256": None,
+        "size_bytes": 0,
+        "contract_valid": False,
+        "claimed_status": None,
+        "claims_match": False,
+    }
+    slot = record["slot"]
+    candidate = record["candidate"]
+    assert isinstance(slot, dict) and isinstance(candidate, dict)
+    slot.update({"state_after": "EMPTY", "active_candidate_after": None})
+    candidate.update(
+        {
+            "candidate_id": None,
+            "version": None,
+            "status": "NONE",
+            "diff_sha256": None,
+            "file_set_sha256": None,
+            "checks_sha256": None,
+            "promotion_predicates_passed": False,
+        }
+    )
+    record["outcome"] = "ATTEMPT_FAILED"
+    return record
+
+
+def _valid_attempt_hold_coding_execution_record() -> dict[str, object]:
+    record = _valid_candidate_ready_coding_execution_record()
+    result = record["agent_result"]
+    slot = record["slot"]
+    candidate = record["candidate"]
+    assert isinstance(result, dict) and isinstance(slot, dict) and isinstance(candidate, dict)
+    result["claimed_status"] = "BLOCKED"
+    slot.update({"state_after": "EMPTY", "active_candidate_after": None})
+    candidate.update(
+        {
+            "candidate_id": None,
+            "version": None,
+            "status": "NONE",
+            "diff_sha256": None,
+            "file_set_sha256": None,
+            "checks_sha256": None,
+            "promotion_predicates_passed": False,
+        }
+    )
+    record["outcome"] = "ATTEMPT_HOLD"
+    return record
 
 
 class ContractCoreTests(unittest.TestCase):
@@ -73,12 +451,192 @@ class ContractRegistryTests(unittest.TestCase):
                 "human_decision_resolution",
                 "agent_task_contract",
                 "agent_result",
+                "coding_execution_record",
                 "review_finding",
                 "verification_record",
                 "audit_event",
                 "release_candidate_manifest",
             },
         )
+
+    def test_coding_execution_record_accepts_exact_prelaunch_hold(self) -> None:
+        validate_contract(
+            "coding_execution_record",
+            _valid_prelaunch_hold_coding_execution_record(),
+        )
+
+    def test_coding_execution_record_accepts_exact_candidate_ready(self) -> None:
+        validate_contract(
+            "coding_execution_record",
+            _valid_candidate_ready_coding_execution_record(),
+        )
+
+    def test_coding_execution_record_accepts_windows_server_2022_platform_profile(self) -> None:
+        record = _valid_candidate_ready_coding_execution_record()
+        executor = record["executor"]
+        assert isinstance(executor, dict)
+        executor["platform"] = (
+            "WINDOWS_SERVER_2022_X64_NTFS_PYTHON_3_13_ELEVATED_PRIVATE_DESKTOP"
+        )
+
+        try:
+            validate_contract("coding_execution_record", record)
+        except ContractValidationError as exc:
+            self.fail(f"Windows Server 2022 profile should be contract-valid: {exc}")
+
+    def test_coding_execution_record_rejects_unqualified_platform_profile(self) -> None:
+        record = _valid_candidate_ready_coding_execution_record()
+        executor = record["executor"]
+        assert isinstance(executor, dict)
+        executor["platform"] = "WINDOWS_SERVER_2025_UNQUALIFIED"
+
+        with self.assertRaises(ContractValidationError) as raised:
+            validate_contract("coding_execution_record", record)
+
+        self.assertIn("executor.platform", str(raised.exception))
+
+    def test_coding_execution_record_rejects_invalid_primitives(self) -> None:
+        mutations = (
+            ("empty-executor-argv", lambda record: record["executor"].update({"argv": []})),
+            ("negative-event-size", lambda record: record["events"].update({"size_bytes": -1})),
+            (
+                "negative-descendant-count",
+                lambda record: record["process"].update({"descendant_count": -1}),
+            ),
+            (
+                "relative-baseline-path",
+                lambda record: record["baseline"].update({"repository_path": "relative/repository"}),
+            ),
+        )
+        for name, mutate in mutations:
+            with self.subTest(name=name):
+                record = _valid_candidate_ready_coding_execution_record()
+                mutate(record)
+                with self.assertRaises(ContractValidationError):
+                    validate_contract("coding_execution_record", record)
+
+    def test_coding_execution_record_accepts_exact_attempt_terminal_outcomes(self) -> None:
+        validate_contract("coding_execution_record", _valid_attempt_failed_coding_execution_record())
+        validate_contract("coding_execution_record", _valid_attempt_hold_coding_execution_record())
+
+    def test_coding_execution_record_rejects_wrong_terminal_outcome_mapping(self) -> None:
+        failed = _valid_attempt_failed_coding_execution_record()
+        failed["outcome"] = "ATTEMPT_HOLD"
+        with self.assertRaises(ContractValidationError):
+            validate_contract("coding_execution_record", failed)
+
+        hold = _valid_attempt_hold_coding_execution_record()
+        hold["outcome"] = "ATTEMPT_FAILED"
+        with self.assertRaises(ContractValidationError):
+            validate_contract("coding_execution_record", hold)
+
+    def test_coding_execution_record_rejects_prelaunch_hold_that_started_process(self) -> None:
+        record = _valid_prelaunch_hold_coding_execution_record()
+        prelaunch = record["prelaunch"]
+        assert isinstance(prelaunch, dict)
+        prelaunch["process_start_requested"] = True
+
+        with self.assertRaises(ContractValidationError) as raised:
+            validate_contract("coding_execution_record", record)
+
+        self.assertIn("prelaunch.process_start_requested", str(raised.exception))
+
+    def test_coding_execution_record_rejects_casefold_colliding_nested_keys(self) -> None:
+        record = _valid_prelaunch_hold_coding_execution_record()
+        packet = record["packet"]
+        assert isinstance(packet, dict)
+        packet["PATH"] = packet["path"]
+
+        with self.assertRaises(ContractValidationError) as raised:
+            validate_contract("coding_execution_record", record)
+
+        self.assertIn("case-fold-colliding", str(raised.exception))
+
+    def test_coding_execution_record_rejects_candidate_diff_mismatch(self) -> None:
+        record = _valid_candidate_ready_coding_execution_record()
+        candidate = record["candidate"]
+        assert isinstance(candidate, dict)
+        candidate["diff_sha256"] = "d" * 64
+
+        with self.assertRaises(ContractValidationError) as raised:
+            validate_contract("coding_execution_record", record)
+
+        self.assertIn("candidate.diff_sha256", str(raised.exception))
+
+    def test_coding_execution_record_rejects_cross_object_and_primitive_mutations(self) -> None:
+        cases: list[tuple[str, dict[str, object], str]] = []
+
+        unsafe_id = _valid_candidate_ready_coding_execution_record()
+        unsafe_id["execution_id"] = "lowercase"
+        cases.append(("unsafe id", unsafe_id, "execution_id"))
+
+        timestamp_without_milliseconds = _valid_candidate_ready_coding_execution_record()
+        timestamp_without_milliseconds["created_at_utc"] = "2026-08-24T00:00:00Z"
+        cases.append(("timestamp precision", timestamp_without_milliseconds, "created_at_utc"))
+
+        baseline_equation = _valid_candidate_ready_coding_execution_record()
+        baseline = baseline_equation["baseline"]
+        assert isinstance(baseline, dict)
+        baseline["unchanged"] = False
+        cases.append(("baseline equality", baseline_equation, "baseline.unchanged"))
+
+        class_universe = _valid_candidate_ready_coding_execution_record()
+        capabilities = class_universe["capabilities"]
+        assert isinstance(capabilities, dict)
+        capabilities["accepted_operation_classes"] = ["WORKSPACE_READ"]
+        cases.append(("operation class universe", class_universe, "capabilities.accepted_operation_classes"))
+
+        operation_sequence = _valid_candidate_ready_coding_execution_record()
+        capabilities = operation_sequence["capabilities"]
+        assert isinstance(capabilities, dict)
+        rows = capabilities["operation_rows"]
+        assert isinstance(rows, list) and isinstance(rows[0], dict)
+        rows[0]["sequence"] = 1
+        cases.append(("operation sequence", operation_sequence, "capabilities.operation_rows[0].sequence"))
+
+        gate_order = _valid_candidate_ready_coding_execution_record()
+        prelaunch = gate_order["prelaunch"]
+        assert isinstance(prelaunch, dict)
+        gate_rows = prelaunch["gate_rows"]
+        assert isinstance(gate_rows, list)
+        gate_rows[0], gate_rows[1] = gate_rows[1], gate_rows[0]
+        cases.append(("prelaunch order", gate_order, "prelaunch.gate_rows"))
+
+        attempt_budget = _valid_candidate_ready_coding_execution_record()
+        attempt = attempt_budget["attempt"]
+        assert isinstance(attempt, dict)
+        attempt["remaining_after"] = 2
+        cases.append(("attempt budget", attempt_budget, "attempt.remaining_after"))
+
+        process_lifecycle = _valid_candidate_ready_coding_execution_record()
+        process = process_lifecycle["process"]
+        assert isinstance(process, dict)
+        process["ended_at_utc"] = None
+        cases.append(("process lifecycle", process_lifecycle, "process.ended_at_utc"))
+
+        git_control = _valid_candidate_ready_coding_execution_record()
+        clone_after = git_control["clone_after"]
+        assert isinstance(clone_after, dict)
+        clone_after["git_control_sha256"] = "d" * 64
+        cases.append(("git control identity", git_control, "clone_after.git_control_sha256"))
+
+        patch_coverage = _valid_candidate_ready_coding_execution_record()
+        clone_after = patch_coverage["clone_after"]
+        assert isinstance(clone_after, dict)
+        clone_after["changed_paths"] = ["acgps/unexplained.py"]
+        cases.append(("patch coverage", patch_coverage, "clone_after.changed_paths"))
+
+        slot_install = _valid_candidate_ready_coding_execution_record()
+        slot = slot_install["slot"]
+        assert isinstance(slot, dict)
+        slot["active_candidate_after"] = "CANDIDATE-OTHER"
+        cases.append(("slot install", slot_install, "slot.active_candidate_after"))
+
+        for name, record, expected_path in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ContractValidationError) as raised:
+                    validate_contract("coding_execution_record", record)
+                self.assertIn(expected_path, str(raised.exception))
 
     def test_task_state_rejects_unknown_state(self) -> None:
         data = {
@@ -373,11 +931,15 @@ class RuntimeFixtureCoverageTests(unittest.TestCase):
 
         fixture_dir = ROOT / "tests" / "fixtures" / "contracts" / "runtime"
         fixture_names = {path.stem for path in fixture_dir.glob("*.yaml")}
-        self.assertEqual(fixture_names, set(contract_names()))
+        inline_fixture_names = {"coding_execution_record"}
+        self.assertEqual(fixture_names | inline_fixture_names, set(contract_names()))
 
         for contract_name in contract_names():
             with self.subTest(contract_name=contract_name):
-                data = yaml.safe_load((fixture_dir / f"{contract_name}.yaml").read_text(encoding="utf-8"))
+                if contract_name == "coding_execution_record":
+                    data = _valid_prelaunch_hold_coding_execution_record()
+                else:
+                    data = yaml.safe_load((fixture_dir / f"{contract_name}.yaml").read_text(encoding="utf-8"))
                 validate_contract(contract_name, data)
 
 

@@ -11,9 +11,11 @@ It coordinates:
 - deterministic workflow gates, audit records, and release authorization;
 - conditional routing of Superpowers, Figma, deep-interview, browser, security, and project-specific skills.
 
-## v0.1 objective
+## v1.0 core objective
 
-Build a CLI-first, file-backed workflow controller that can register a project, intake a task, classify risk, determine required skills and gates, generate role-specific task packets, maintain a human decision queue, validate evidence, and integrate with the existing review kit.
+Deliver a CLI-first, local workflow controller for human-supervised development on Windows Server 2022 with Python 3.13. It can register a project, intake a task, classify risk, determine required skills and gates, generate role-specific task packets, expose pending human decisions, validate evidence, and integrate with the existing review kit.
+
+The bounded coding executor is included as an implemented but unqualified capability and is disabled by default. ACGPS v1.0 core does not authorize autonomous model execution, live trading, broker credentials, deployment, or release actions.
 
 ## Quick orientation
 
@@ -32,22 +34,23 @@ python scripts/check.py setup
 python scripts/check.py full
 ```
 
-This public source boundary contains the reusable v0.1 product, stable design
+This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs
 are intentionally not part of the distribution.
 
-## v0.1 release readiness
+## v1.0 core release readiness
 
-The v0.1 release-readiness boundary is Windows with Python 3.13. Linux release
-qualification is deferred; the ordinary unit tests remain portable where their
-applicability manifest requires both platforms.
+The v1.0 core release-readiness boundary is Windows Server 2022 with Python
+3.13 in human-supervised local-development mode. Bounded-executor P4/P5
+qualification and autonomous model execution are deferred. Ordinary unit tests
+remain portable where their applicability boundary permits.
 
 Build and verify the deterministic source artifact without publishing it:
 
 ```powershell
-python scripts/build_mvp_source_archive.py . dist/acgps-v0.1-source.zip
-python scripts/release_readiness.py --archive dist/acgps-v0.1-source.zip
+python scripts/build_mvp_source_archive.py . dist/acgps-v1.0-core-source.zip
+python scripts/release_readiness.py --archive dist/acgps-v1.0-core-source.zip
 python scripts/check.py release
 ```
 
@@ -58,7 +61,7 @@ publishing, deployment, or production release.
 
 ## Intended first pilot
 
-FTIC is the first dogfood project. The initial pilot validates the workflow and governance integration without changing FTIC's intelligence, evidence, forecast, or report behavior.
+FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.
 
 ## License
 

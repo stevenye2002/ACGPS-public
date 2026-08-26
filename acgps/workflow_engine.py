@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from acgps.contracts import ContractValidationError, validate_contract
 from acgps.human_decisions import DecisionQueue, DecisionQueueError
 from acgps.policy import PolicyEvaluationError, evaluate_policy, load_policy_bundle, validate_project_registration
-from acgps.review_adapter import ReviewEvidenceError, validate_review_findings, verify_release_candidate_manifest
+from acgps.review_adapter import (
+    ReviewEvidenceError,
+    validate_fix_required_findings,
+    validate_review_findings,
+    verify_release_candidate_manifest,
+)
 from acgps.workflow_contracts import (
     canonical_json_bytes,
     validate_task_initialization_request,
@@ -47,7 +53,7 @@ class WorkflowEngine:
         if state_resolved == project_resolved or state_resolved.is_relative_to(project_resolved):
             raise WorkflowEngineError("state_root must remain outside the managed project root")
         self.store = WorkflowStore(self.state_root)
-        self.decisions = DecisionQueue(self.state_root / "decisions")
+        self.decisions = DecisionQueue(self.state_root / "decisions", workflow_store=self.store)
 
     def intake(self, intake: dict[str, Any], *, actor: str = "PLANNER") -> dict[str, Any]:
         try:
@@ -192,7 +198,11 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 f"transition {current['current_state']} -> {actual_target} is not policy-authorized"
             )
-        required_actor = {"INTEGRATING": "REVIEWER", "VERIFIED": "VERIFIER"}.get(actual_target)
+        required_actor = {
+            "FIX_REQUIRED": "REVIEWER",
+            "INTEGRATING": "REVIEWER",
+            "VERIFIED": "VERIFIER",
+        }.get(actual_target)
         if required_actor is not None and actor != required_actor:
             raise WorkflowEngineError(f"{actual_target} requires actor {required_actor}")
         evidence_items = [Path(path) for path in evidence_paths]
@@ -243,7 +253,7 @@ class WorkflowEngine:
             if decision_resolution is None or decision_resolution.get("decision_id") != current["pending_decision_id"]:
                 raise WorkflowEngineError("WAITING_HUMAN requires its matching decision resolution")
             try:
-                self.decisions.resolve(decision_resolution)
+                self.decisions.validate_resolution(decision_resolution)
             except DecisionQueueError as exc:
                 raise WorkflowEngineError(str(exc)) from exc
             decision_binding = {
@@ -328,6 +338,11 @@ class WorkflowEngine:
             "pending_decision_id": pending_decision_id,
             "updated_at_utc": created_at_utc,
         }
+        if decision_resolution is not None:
+            try:
+                self.decisions.resolve(decision_resolution)
+            except DecisionQueueError as exc:
+                raise WorkflowEngineError(str(exc)) from exc
         try:
             self.store.commit_task_state_and_audit(event, state)
         except WorkflowStoreError as exc:
@@ -341,10 +356,24 @@ class WorkflowEngine:
         current: dict[str, Any],
     ) -> None:
         try:
-            if target == "INTEGRATING":
-                validate_review_findings(paths)
+            if target == "FIX_REQUIRED":
+                validate_fix_required_findings(paths)
+            elif target == "INTEGRATING":
+                records = validate_review_findings(paths)
+                required_ids = self._current_fix_cycle_blocker_ids(current)
+                closed_ids = {
+                    record["finding_id"]
+                    for record in records
+                    if record["status"] in {"VERIFIED", "CLOSED"}
+                }
+                missing_ids = sorted(required_ids - closed_ids)
+                if missing_ids:
+                    raise WorkflowEngineError(
+                        "INTEGRATING requires closed review evidence for: " + ", ".join(missing_ids)
+                    )
             elif target == "VERIFIED":
                 verified = False
+                boundary = self._fix_cycle_integration_boundary(current)
                 for path in paths:
                     record = self._read_json(path)
                     validate_contract("verification_record", record, mode="runtime")
@@ -352,7 +381,12 @@ class WorkflowEngine:
                         raise WorkflowEngineError(
                             "verification evidence project_id and task_id must match the current task"
                         )
-                    verified = verified or record["recommendation"] == "VERIFIED"
+                    if record["recommendation"] == "VERIFIED":
+                        if boundary is not None and self._utc_instant(record["verified_at_utc"]) < boundary:
+                            raise WorkflowEngineError(
+                                "verification evidence predates the current fix-cycle integration boundary"
+                            )
+                        verified = True
                 if not verified:
                     raise WorkflowEngineError("VERIFIED requires a successful verification record")
             elif target == "RC_READY":
@@ -367,6 +401,145 @@ class WorkflowEngine:
                     raise WorkflowEngineError("RC_READY requires a valid release-candidate manifest")
         except (ContractValidationError, ReviewEvidenceError) as exc:
             raise WorkflowEngineError(str(exc)) from exc
+
+    def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
+        blocker_ids: set[str] = set()
+        for event in self._current_fix_cycle_events(current):
+            if event["to_state"] != "FIX_REQUIRED":
+                continue
+            paths = [self._bound_evidence_path(binding) for binding in event["evidence_bindings"]]
+            records = validate_fix_required_findings(paths)
+            blocker_ids.update(
+                record["finding_id"]
+                for record in records
+                if record["severity"] in {"P0", "P1"}
+                and record["status"] in {"OPEN", "IN_PROGRESS"}
+                and record["disposition"] in {"ACCEPTED", "PARTIAL"}
+            )
+        return blocker_ids
+
+    def _fix_cycle_integration_boundary(self, current: dict[str, Any]) -> datetime | None:
+        events = self._current_fix_cycle_events(current)
+        if not events:
+            return None
+        latest_fix_index = max(index for index, event in enumerate(events) if event["to_state"] == "FIX_REQUIRED")
+        integrations = [
+            event
+            for event in events[latest_fix_index + 1 :]
+            if event["to_state"] == "INTEGRATING"
+        ]
+        if not integrations:
+            raise WorkflowEngineError("VERIFIED requires an INTEGRATING boundary after the latest FIX_REQUIRED")
+        return self._utc_instant(integrations[-1]["created_at_utc"])
+
+    def _current_fix_cycle_events(self, current: dict[str, Any]) -> list[dict[str, Any]]:
+        events = self._trusted_audit_lineage(current)
+        previous_verified = max(
+            (index for index, event in enumerate(events) if event["to_state"] == "VERIFIED"),
+            default=-1,
+        )
+        current_interval = events[previous_verified + 1 :]
+        if not any(event["to_state"] == "FIX_REQUIRED" for event in current_interval):
+            return []
+        return current_interval
+
+    def _trusted_audit_lineage(self, current: dict[str, Any]) -> list[dict[str, Any]]:
+        task_id = current["task_id"]
+        project_id = current["project_id"]
+        current_generation = current["audit_generation"]
+        generation = current_generation
+        expected_head_event_id = current["audit_head_event_id"]
+        expected_head_sequence: int | None = None
+        expected_head_hash = current["audit_head_hash"]
+        visited: set[int] = set()
+        generations: list[list[dict[str, Any]]] = []
+        while True:
+            if generation in visited or generation < 1 or generation > current_generation:
+                raise WorkflowEngineError("audit generation lineage is cyclic or invalid")
+            visited.add(generation)
+            try:
+                rows = self.store.read_audit_events(task_id, generation=generation)
+            except WorkflowStoreError as exc:
+                raise WorkflowEngineError(str(exc)) from exc
+            prefix: list[dict[str, Any]] = []
+            previous_hash = None
+            head_index = None
+            for event in rows:
+                if (
+                    event["project_id"] != project_id
+                    or event["task_id"] != task_id
+                    or event["generation"] != generation
+                    or event["sequence"] != len(prefix) + 1
+                    or event["previous_event_hash"] != previous_hash
+                    or event["event_hash"] != self._canonical_sha(dict(event, event_hash=None))
+                ):
+                    raise WorkflowEngineError("audit prefix identity or hash chain mismatch")
+                prefix.append(event)
+                previous_hash = event["event_hash"]
+                if event["event_hash"] == expected_head_hash:
+                    head_index = len(prefix) - 1
+                    break
+            if head_index is None:
+                raise WorkflowEngineError("trusted audit head is missing")
+            head = prefix[head_index]
+            if head["event_id"] != expected_head_event_id:
+                raise WorkflowEngineError("trusted audit head event identity mismatch")
+            if expected_head_sequence is not None and head["sequence"] != expected_head_sequence:
+                raise WorkflowEngineError("trusted audit head sequence mismatch")
+            if generation == current_generation and head_index != len(rows) - 1:
+                raise WorkflowEngineError("current audit head is not the authoritative tail")
+            generations.append(prefix)
+            generation_record = prefix[0].get("details", {}).get("audit_generation")
+            if not isinstance(generation_record, dict) or generation_record.get("generation") != generation:
+                raise WorkflowEngineError("audit generation start record is missing")
+            predecessor = generation_record.get("predecessor_generation")
+            predecessor_hash = generation_record.get("predecessor_valid_head_hash")
+            if predecessor is None:
+                if generation != 1 or predecessor_hash is not None:
+                    raise WorkflowEngineError("audit generation lineage ended before generation one")
+                break
+            if not isinstance(predecessor, int) or isinstance(predecessor, bool) or predecessor >= generation:
+                raise WorkflowEngineError("audit predecessor is invalid")
+            trusted_prefix = prefix[0].get("details", {}).get("previous_trusted_prefix")
+            if (
+                not isinstance(trusted_prefix, dict)
+                or trusted_prefix.get("generation") != predecessor
+                or trusted_prefix.get("event_hash") != predecessor_hash
+            ):
+                raise WorkflowEngineError("audit predecessor binding mismatch")
+            generation = predecessor
+            expected_head_event_id = trusted_prefix.get("event_id")
+            expected_head_sequence = trusted_prefix.get("sequence")
+            expected_head_hash = predecessor_hash
+        return [event for events in reversed(generations) for event in events]
+
+    def _bound_evidence_path(self, binding: dict[str, Any]) -> Path:
+        logical_path = binding.get("path")
+        if binding.get("source") != "path" or not isinstance(logical_path, str):
+            raise WorkflowEngineError("fix-cycle evidence binding must reference a path")
+        prefix, separator, relative = logical_path.partition("/")
+        roots = {"project": self.project_root, "state": self.state_root}
+        if not separator or prefix not in roots or not relative:
+            raise WorkflowEngineError("fix-cycle evidence binding path is invalid")
+        rebound_logical, resolved = self._evidence_location(roots[prefix] / Path(relative))
+        payload = resolved.read_bytes()
+        if (
+            rebound_logical != logical_path
+            or binding.get("size_bytes") != len(payload)
+            or binding.get("content_sha256") != hashlib.sha256(payload).hexdigest()
+        ):
+            raise WorkflowEngineError("fix-cycle evidence binding content changed")
+        return resolved
+
+    @staticmethod
+    def _utc_instant(value: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (TypeError, ValueError) as exc:
+            raise WorkflowEngineError("evidence timestamp must be an RFC 3339 instant") from exc
+        if parsed.tzinfo is None:
+            raise WorkflowEngineError("evidence timestamp must include a UTC offset")
+        return parsed.astimezone(timezone.utc)
 
     def _path_evidence_binding(
         self,

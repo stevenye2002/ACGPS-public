@@ -1,4 +1,4 @@
-# ACGPS v0.1 Acceptance Criteria
+# ACGPS v1.0 Core Acceptance Criteria
 
 ## Functional
 
@@ -15,6 +15,8 @@
 - `AC-011` Production release remains blocked without explicit human authorization.
 - `AC-012` All state-changing operations append audit events.
 - `AC-013` Interrupted or corrupted workflow state either recovers from a valid audit prefix or fails closed with a recovery diagnostic.
+- `AC-014` Pending human decisions are inspectable through a read-only CLI command and disappear after a matching recorded resolution resumes the task.
+- `AC-015` Release readiness accepts only the Windows Server 2022 and Python 3.13 core-only platform boundary.
 
 ## Quality
 
@@ -22,7 +24,7 @@
 - State transitions are deterministic and unit tested.
 - Schemas are versioned and reject incompatible inputs.
 - No secrets are included in generated packets or review artifacts.
-- The CLI is usable on Windows and Unix-like systems.
+- The release-qualified CLI is usable on Windows Server 2022 with Python 3.13; portable tests may run on other systems without expanding the release claim.
 - Core tests require no network or paid service.
 - Documentation and configuration examples remain synchronized through tests.
 
@@ -39,3 +41,4 @@ At least one FTIC task completes the pilot workflow with:
 - frozen review artifacts;
 - audit trail;
 - no unnecessary human question.
+- no autonomous model execution, live trading, broker credential access, or managed-project write outside the approved task scope.

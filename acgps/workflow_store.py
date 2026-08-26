@@ -12,9 +12,11 @@ from pathlib import PureWindowsPath
 import re
 import secrets
 import tempfile
+import time
 from datetime import datetime
 from typing import Any
 
+from acgps.contracts import ContractValidationError, validate_contract
 from acgps.workflow_contracts import (
     WorkflowIssue,
     canonical_json_bytes,
@@ -654,6 +656,32 @@ def _connection_file_binding(path: Path) -> tuple[object, ...]:
     )
 
 
+def _read_only_file_identity(path: Path) -> tuple[object, ...]:
+    if not path.is_file() or path.is_symlink():
+        _raise("WORKFLOW_STATE_CORRUPT", "control_store", "read-only authority artifact must be a regular file")
+    stat = path.stat()
+    return (
+        _norm_path(path),
+        stat.st_mode,
+        stat.st_size,
+        stat.st_mtime_ns,
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+
+def _read_only_sidecar_paths(path: Path) -> tuple[Path, ...]:
+    return tuple(path.with_name(path.name + suffix) for suffix in ("-journal", "-shm", "-wal"))
+
+
+def _reject_read_only_sidecars(path: Path) -> None:
+    if any(sidecar.exists() or sidecar.is_symlink() for sidecar in _read_only_sidecar_paths(path)):
+        _raise(
+            "WORKFLOW_STATE_CORRUPT",
+            "control_store",
+            "read-only authority query requires a quiescent control store without journal sidecars",
+        )
+
+
 def _control_store_authority_generation(connection: sqlite3.Connection) -> int:
     row = connection.execute("SELECT authority_generation FROM control_authority WHERE singleton = 1").fetchone()
     if row is None or not isinstance(row[0], int) or isinstance(row[0], bool) or row[0] < 0:
@@ -945,6 +973,54 @@ def _control_connection(
             connection.close()
 
 
+@contextmanager
+def _read_only_control_connection(
+    path: Path,
+    *,
+    expected_authority_id: str,
+    expected_root_binding: str,
+    expected_authority_digest: str,
+    expected_authority_generation: int,
+):
+    if not path.exists():
+        _raise("WORKFLOW_STATE_CORRUPT", "control_store", "control store is missing")
+    _require_control_store_path(path)
+    marker_path = _control_marker_path(path)
+    _reject_read_only_sidecars(path)
+    before = (_read_only_file_identity(path), _read_only_file_identity(marker_path))
+    connection = None
+    try:
+        uri = path.resolve(strict=True).as_uri() + "?mode=ro&immutable=1"
+        connection = sqlite3.connect(uri, uri=True, timeout=30.0, isolation_level=None)
+        connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA query_only = ON")
+        _CONTROL_CONNECTION_BINDINGS[id(connection)] = (_norm_path(path), _connection_file_binding(path))
+        _validate_control_store_connection(
+            connection,
+            expected_authority_id=expected_authority_id,
+            expected_root_binding=expected_root_binding,
+            expected_authority_digest=expected_authority_digest,
+        )
+        if _control_store_authority_generation(connection) != expected_authority_generation:
+            _raise(
+                "WORKFLOW_STATE_CORRUPT",
+                "control_store_authority.authority_generation",
+                "control-store authority marker generation mismatch",
+            )
+        yield connection
+    except sqlite3.Error as exc:
+        _raise("WORKFLOW_STATE_CORRUPT", "control_store", f"read-only control store failure: {exc}")
+    finally:
+        if connection is not None:
+            _CONTROL_CONNECTION_BINDINGS.pop(id(connection), None)
+            connection.close()
+        _reject_read_only_sidecars(path)
+        after = (_read_only_file_identity(path), _read_only_file_identity(marker_path))
+        if after != before:
+            _raise("WORKFLOW_STATE_CORRUPT", "control_store", "read-only authority artifacts changed during query")
+
+
 def _validate_control_store_connection(
     connection: sqlite3.Connection,
     *,
@@ -1075,22 +1151,224 @@ def _create_control_store_schema(connection: sqlite3.Connection) -> None:
     )
 
 
+CODING_EXECUTION_STATE_FIELDS = {
+    "schema_version",
+    "gate_id",
+    "task_id",
+    "gate_binding",
+    "state",
+    "remaining_attempts",
+    "active_candidate_id",
+    "historical_candidate_ids",
+    "remediation_authorization_id",
+    "reserved_attempt",
+    "records",
+}
+CODING_EXECUTION_RESERVATION_FIELDS = {
+    "number",
+    "reserved_at_utc",
+    "parent_candidate_id",
+    "kind",
+    "remaining_before",
+    "remaining_after",
+}
+CODING_EXECUTION_SLOT_STATES = {
+    "EMPTY",
+    "FROZEN_REVIEW_V1",
+    "REJECTED_HOLD_V1",
+    "EMPTY_FOR_REMEDIATION",
+    "FROZEN_REVIEW_V2",
+}
+
+
+def _coding_execution_public_state(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "gate_id": state["gate_id"],
+        "task_id": state["task_id"],
+        "gate_binding": json.loads(json.dumps(state["gate_binding"], sort_keys=True)) if state["gate_binding"] is not None else None,
+        "state": state["state"],
+        "remaining_attempts": state["remaining_attempts"],
+        "active_candidate_id": state["active_candidate_id"],
+        "historical_candidate_ids": list(state["historical_candidate_ids"]),
+        "remediation_authorization_id": state["remediation_authorization_id"],
+        "reserved_attempt": dict(state["reserved_attempt"]) if isinstance(state["reserved_attempt"], dict) else None,
+    }
+
+
+def _coding_execution_record_binding(record: dict[str, Any]) -> dict[str, Any]:
+    baseline = record["baseline"]
+    capabilities = record["capabilities"]
+    return {
+        "packet": dict(record["packet"]),
+        "baseline": {
+            "repository_path": baseline["repository_path"],
+            "commit": baseline["commit"],
+            "tree": baseline["tree"],
+        },
+        "executor": dict(record["executor"]),
+        "capabilities": {
+            "authorized_write_paths": list(capabilities["authorized_write_paths"]),
+            "check_allowlist_sha256": capabilities["check_allowlist_sha256"],
+            "effective_config_sha256": capabilities["effective_config_sha256"],
+            "git_read_allowlist_sha256": capabilities["git_read_allowlist_sha256"],
+            "network_policy_sha256": capabilities["network_policy_sha256"],
+        },
+    }
+
+
+def _validate_coding_execution_state(state: object, *, gate_id: str) -> dict[str, Any]:
+    data = _require_mapping(state, "coding_execution")
+    if set(data) != CODING_EXECUTION_STATE_FIELDS:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution", "coding execution state fields are invalid")
+    if data["schema_version"] != 2:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.schema_version", "unsupported coding execution state")
+    _require_safe_id(data["gate_id"], "coding_execution.gate_id")
+    _require_safe_id(data["task_id"], "coding_execution.task_id")
+    if data["gate_id"] != gate_id:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.gate_id", "gate identity mismatch")
+    if data["state"] not in CODING_EXECUTION_SLOT_STATES:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.state", "unknown coding execution slot state")
+    remaining = data["remaining_attempts"]
+    gate_binding = data["gate_binding"]
+    if gate_binding is not None:
+        gate_binding = _require_mapping(gate_binding, "coding_execution.gate_binding")
+        if set(gate_binding) != {"packet", "baseline", "executor", "capabilities"}:
+            _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.gate_binding", "gate binding fields are invalid")
+    if type(remaining) is not int or remaining not in (0, 1, 2):
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.remaining_attempts", "remaining attempts must be zero, one, or two")
+    active = data["active_candidate_id"]
+    if active is not None:
+        _require_safe_id(active, "coding_execution.active_candidate_id")
+    if data["state"] in {"EMPTY", "EMPTY_FOR_REMEDIATION"} and active is not None:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.active_candidate_id", "empty states cannot have an active candidate")
+    if data["state"].startswith("FROZEN_REVIEW") and active is None:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.active_candidate_id", "frozen review states require a candidate")
+    historical = data["historical_candidate_ids"]
+    if not isinstance(historical, list) or not all(isinstance(item, str) for item in historical):
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.historical_candidate_ids", "historical IDs must be a list")
+    if historical != sorted(set(historical)):
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.historical_candidate_ids", "historical IDs must be sorted and unique")
+    for item in historical:
+        _require_safe_id(item, "coding_execution.historical_candidate_ids")
+    if active in historical:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.active_candidate_id", "active candidate cannot be historical")
+    remediation_authorization_id = data["remediation_authorization_id"]
+    if remediation_authorization_id is not None:
+        _require_safe_id(remediation_authorization_id, "coding_execution.remediation_authorization_id")
+    if data["state"] == "EMPTY_FOR_REMEDIATION" and remediation_authorization_id is None:
+        _raise(
+            "WORKFLOW_STATE_CORRUPT",
+            "coding_execution.remediation_authorization_id",
+            "remediation state requires an authorization identity",
+        )
+    reservation = data["reserved_attempt"]
+    if reservation is not None:
+        reservation = _require_mapping(reservation, "coding_execution.reserved_attempt")
+        if set(reservation) != CODING_EXECUTION_RESERVATION_FIELDS:
+            _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.reserved_attempt", "reservation fields are invalid")
+        if reservation["number"] not in (1, 2) or reservation["remaining_after"] != remaining:
+            _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.reserved_attempt", "reservation budget does not match state")
+        if reservation["remaining_before"] != remaining + 1:
+            _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.reserved_attempt", "reservation did not decrement exactly once")
+        if reservation["kind"] not in {"ORDINARY", "REMEDIATION"}:
+            _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.reserved_attempt.kind", "unknown attempt kind")
+    records = data["records"]
+    if not isinstance(records, list):
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.records", "execution records must be a list")
+    execution_ids: list[str] = []
+    for index, record in enumerate(records):
+        try:
+            validate_contract("coding_execution_record", record)
+        except (ContractValidationError, TypeError) as exc:
+            _raise("WORKFLOW_STATE_CORRUPT", f"coding_execution.records[{index}]", str(exc))
+        if record["gate_id"] != data["gate_id"] or record["task_id"] != data["task_id"]:
+            _raise("WORKFLOW_STATE_CORRUPT", f"coding_execution.records[{index}]", "record gate/task identity mismatch")
+        execution_ids.append(record["execution_id"])
+        if record["outcome"] != "PRELAUNCH_HOLD":
+            if gate_binding is None or _coding_execution_record_binding(record) != gate_binding:
+                _raise(
+                    "WORKFLOW_STATE_CORRUPT",
+                    f"coding_execution.records[{index}]",
+                    "reserved attempts must use the immutable Gate packet/baseline/executor binding",
+                )
+    if sum(record["attempt"]["number"] is not None for record in records) > 2:
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.records", "at most two reserved attempts are permitted")
+    if len(execution_ids) != len(set(execution_ids)):
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.records", "execution identities must be unique")
+    consumed_attempts = sum(record["attempt"]["number"] is not None for record in records)
+    if reservation is not None:
+        consumed_attempts += 1
+    if remaining != 2 - consumed_attempts:
+        _raise(
+            "WORKFLOW_STATE_CORRUPT",
+            "coding_execution.remaining_attempts",
+            "remaining budget must equal two minus reserved and completed attempts",
+        )
+    candidate_records = [record for record in records if record["outcome"] == "CANDIDATE_READY"]
+    candidate_ids = [record["candidate"]["candidate_id"] for record in candidate_records]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.records", "candidate identities must be unique")
+    if active is not None and active not in candidate_ids:
+        _raise(
+            "WORKFLOW_STATE_CORRUPT",
+            "coding_execution.active_candidate_id",
+            "active candidate must be bound to a completed execution record",
+        )
+    if any(candidate_id not in candidate_ids for candidate_id in historical):
+        _raise(
+            "WORKFLOW_STATE_CORRUPT",
+            "coding_execution.historical_candidate_ids",
+            "historical candidates must remain bound to immutable execution records",
+        )
+    return data
+
+
 class WorkflowStore:
-    def __init__(self, state_root: Path):
-        self.state_root = state_root
-        self.state_root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, state_root: Path, *, read_only: bool = False):
+        self.state_root = Path(state_root)
+        self.read_only = read_only
+        if read_only:
+            if not self.state_root.is_dir() or self.state_root.is_symlink():
+                _raise("WORKFLOW_STATE_CORRUPT", "state_root", "read-only state root must be an existing directory")
+            _reject_symlink_ancestors(self.state_root)
+        else:
+            self.state_root.mkdir(parents=True, exist_ok=True)
         self.control_store_path = self.state_root / CONTROL_STORE_FILENAME
-        self.control_authority_id, self.control_store_authority_digest = _initialize_control_store(self.control_store_path, self.state_root)
         self.control_root_binding = _root_binding(self.state_root)
+        if read_only:
+            marker = _read_authority_marker(self.control_store_path, self.state_root)
+            if marker is None:
+                _raise("WORKFLOW_STATE_CORRUPT", "control_store_authority", "control-store authority marker is missing")
+            self.control_authority_id = marker["authority_id"]
+            self.control_store_authority_digest = marker["control_store_authority_digest"]
+            self.control_authority_generation = marker["authority_generation"]
+            with self._connection():
+                pass
+        else:
+            self.control_authority_id, self.control_store_authority_digest = _initialize_control_store(
+                self.control_store_path,
+                self.state_root,
+            )
+            self.control_authority_generation = None
 
     @contextmanager
     def _connection(self):
-        with _control_connection(
-            self.control_store_path,
-            expected_authority_id=self.control_authority_id,
-            expected_root_binding=self.control_root_binding,
-        ) as connection:
-            yield connection
+        if self.read_only:
+            with _read_only_control_connection(
+                self.control_store_path,
+                expected_authority_id=self.control_authority_id,
+                expected_root_binding=self.control_root_binding,
+                expected_authority_digest=self.control_store_authority_digest,
+                expected_authority_generation=self.control_authority_generation,
+            ) as connection:
+                yield connection
+        else:
+            with _control_connection(
+                self.control_store_path,
+                expected_authority_id=self.control_authority_id,
+                expected_root_binding=self.control_root_binding,
+            ) as connection:
+                yield connection
 
     def state_path(self, task_id: str) -> Path:
         _require_safe_id(task_id, "task_id")
@@ -1114,6 +1392,259 @@ class WorkflowStore:
             _raise("WORKFLOW_INVALID_INPUT", "idempotency_key", "idempotency key must be non-empty")
         digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         return safe_state_path(self.state_root, f"idempotency/{task_id}/{operation_kind}/{digest}.json")
+
+    def coding_execution_slot_path(self, gate_id: str) -> Path:
+        _require_safe_id(gate_id, "gate_id")
+        return safe_state_path(self.state_root, f"coding-execution/{gate_id}/slot.json")
+
+    def initialize_coding_execution_slot(self, gate_id: str, task_id: str) -> dict[str, Any]:
+        _require_safe_id(gate_id, "gate_id")
+        _require_safe_id(task_id, "task_id")
+        path = self.coding_execution_slot_path(gate_id)
+        with self.acquire_task_lock(
+            gate_id,
+            owner_id=f"CODING-{os.getpid()}",
+            now_monotonic=time.monotonic(),
+            stale_after_seconds=1800.0,
+        ):
+            if path.exists():
+                state = self._read_coding_execution_state(gate_id)
+                if state["task_id"] != task_id:
+                    _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.task_id", "gate already belongs to another task")
+                return _coding_execution_public_state(state)
+            state = {
+                "schema_version": 2,
+                "gate_id": gate_id,
+                "task_id": task_id,
+                "gate_binding": None,
+                "state": "EMPTY",
+                "remaining_attempts": 2,
+                "active_candidate_id": None,
+                "historical_candidate_ids": [],
+                "remediation_authorization_id": None,
+                "reserved_attempt": None,
+                "records": [],
+            }
+            _validate_coding_execution_state(state, gate_id=gate_id)
+            write_state_atomic(path, state)
+            return _coding_execution_public_state(state)
+
+    def read_coding_execution_slot(self, gate_id: str) -> dict[str, Any]:
+        return _coding_execution_public_state(self._read_coding_execution_state(gate_id))
+
+    def read_coding_execution_record(self, gate_id: str, execution_id: str) -> dict[str, Any]:
+        _require_safe_id(execution_id, "execution_id")
+        state = self._read_coding_execution_state(gate_id)
+        for record in state["records"]:
+            if record["execution_id"] == execution_id:
+                return record
+        _raise("WORKFLOW_STATE_CORRUPT", "coding_execution.record", "execution record is missing")
+
+    def reserve_coding_execution_attempt(
+        self,
+        gate_id: str,
+        *,
+        kind: str,
+        parent_candidate_id: str | None,
+        reserved_at_utc: str,
+    ) -> dict[str, Any]:
+        path = self.coding_execution_slot_path(gate_id)
+        with self.acquire_task_lock(
+            gate_id,
+            owner_id=f"CODING-{os.getpid()}",
+            now_monotonic=time.monotonic(),
+            stale_after_seconds=1800.0,
+        ):
+            state = self._read_coding_execution_state(gate_id)
+            if state["reserved_attempt"] is not None:
+                _raise("WORKFLOW_CONCURRENT_WRITE", "coding_execution.reserved_attempt", "an attempt is already reserved")
+            remaining = state["remaining_attempts"]
+            if remaining == 0:
+                _raise("WORKFLOW_BUDGET_EXHAUSTED", "coding_execution.remaining_attempts", "the two-attempt budget is exhausted")
+            if kind == "ORDINARY":
+                if state["state"] != "EMPTY" or parent_candidate_id is not None:
+                    _raise("WORKFLOW_INVALID_INPUT", "coding_execution.attempt", "ORDINARY requires EMPTY and no parent")
+            elif kind == "REMEDIATION":
+                if (
+                    state["state"] != "EMPTY_FOR_REMEDIATION"
+                    or remaining != 1
+                    or parent_candidate_id not in state["historical_candidate_ids"]
+                    or state["remediation_authorization_id"] is None
+                ):
+                    _raise(
+                        "WORKFLOW_INVALID_INPUT",
+                        "coding_execution.attempt",
+                        "REMEDIATION requires EMPTY_FOR_REMEDIATION, Attempt 2, and the historical v1 parent",
+                    )
+            else:
+                _raise("WORKFLOW_INVALID_INPUT", "coding_execution.attempt.kind", "unknown attempt kind")
+            if not isinstance(reserved_at_utc, str) or not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z",
+                reserved_at_utc,
+            ):
+                _raise("WORKFLOW_INVALID_INPUT", "coding_execution.attempt.reserved_at_utc", "timestamp must use millisecond UTC")
+            number = 3 - remaining
+            reservation = {
+                "number": number,
+                "reserved_at_utc": reserved_at_utc,
+                "parent_candidate_id": parent_candidate_id,
+                "kind": kind,
+                "remaining_before": remaining,
+                "remaining_after": remaining - 1,
+            }
+            state["remaining_attempts"] = remaining - 1
+            state["reserved_attempt"] = reservation
+            _validate_coding_execution_state(state, gate_id=gate_id)
+            write_state_atomic(path, state)
+            return reservation
+
+    def retire_coding_execution_candidate_for_remediation(
+        self,
+        gate_id: str,
+        candidate_id: str,
+        *,
+        authorization_id: str,
+    ) -> dict[str, Any]:
+        _require_safe_id(candidate_id, "candidate_id")
+        _require_safe_id(authorization_id, "authorization_id")
+        path = self.coding_execution_slot_path(gate_id)
+        with self.acquire_task_lock(
+            gate_id,
+            owner_id=f"CODING-{os.getpid()}",
+            now_monotonic=time.monotonic(),
+            stale_after_seconds=1800.0,
+        ):
+            state = self._read_coding_execution_state(gate_id)
+            if (
+                state["state"] != "FROZEN_REVIEW_V1"
+                or state["active_candidate_id"] != candidate_id
+                or state["remaining_attempts"] != 1
+                or state["reserved_attempt"] is not None
+                or state["historical_candidate_ids"]
+            ):
+                _raise(
+                    "WORKFLOW_INVALID_INPUT",
+                    "coding_execution.remediation",
+                    "only the sole frozen Candidate v1 can be retired for Attempt-2 remediation",
+                )
+            state["state"] = "EMPTY_FOR_REMEDIATION"
+            state["active_candidate_id"] = None
+            state["historical_candidate_ids"] = [candidate_id]
+            state["remediation_authorization_id"] = authorization_id
+            _validate_coding_execution_state(state, gate_id=gate_id)
+            write_state_atomic(path, state)
+            return _coding_execution_public_state(state)
+
+    def publish_coding_execution_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        try:
+            validate_contract("coding_execution_record", record)
+        except ContractValidationError as exc:
+            _raise("WORKFLOW_INVALID_INPUT", "coding_execution.record", str(exc))
+        gate_id = record["gate_id"]
+        task_id = record["task_id"]
+        path = self.coding_execution_slot_path(gate_id)
+        with self.acquire_task_lock(
+            gate_id,
+            owner_id=f"CODING-{os.getpid()}",
+            now_monotonic=time.monotonic(),
+            stale_after_seconds=1800.0,
+        ):
+            state = self._read_coding_execution_state(gate_id)
+            if state["task_id"] != task_id:
+                _raise("WORKFLOW_INVALID_INPUT", "coding_execution.record.task_id", "record task does not own the gate")
+            existing_record = next(
+                (item for item in state["records"] if item["execution_id"] == record["execution_id"]),
+                None,
+            )
+            if existing_record is not None:
+                if existing_record == record:
+                    return _coding_execution_public_state(state)
+                _raise("WORKFLOW_IDEMPOTENCY_CONFLICT", "coding_execution.execution_id", "execution identity already exists")
+            if record["outcome"] != "PRELAUNCH_HOLD":
+                record_binding = _coding_execution_record_binding(record)
+                if state["gate_binding"] is None:
+                    state["gate_binding"] = record_binding
+                elif state["gate_binding"] != record_binding:
+                    _raise(
+                        "WORKFLOW_INVALID_INPUT",
+                        "coding_execution.record",
+                        "record packet/baseline/executor identity differs from the immutable Gate binding",
+                    )
+            reservation = state["reserved_attempt"]
+            if record["outcome"] == "PRELAUNCH_HOLD":
+                if reservation is not None:
+                    _raise(
+                        "WORKFLOW_INVALID_INPUT",
+                        "coding_execution.reserved_attempt",
+                        "prelaunch HOLD cannot be published after attempt reservation",
+                    )
+                slot = record["slot"]
+                if (
+                    record["attempt"]["remaining_before"] != state["remaining_attempts"]
+                    or record["attempt"]["remaining_after"] != state["remaining_attempts"]
+                    or slot["state_before"] != state["state"]
+                    or slot["state_after"] != state["state"]
+                    or slot["active_candidate_before"] != state["active_candidate_id"]
+                    or slot["active_candidate_after"] != state["active_candidate_id"]
+                    or slot["historical_candidate_ids"] != state["historical_candidate_ids"]
+                ):
+                    _raise(
+                        "WORKFLOW_INVALID_INPUT",
+                        "coding_execution.record",
+                        "prelaunch HOLD must preserve the current slot and attempt budget",
+                    )
+                state["records"].append(record)
+                _validate_coding_execution_state(state, gate_id=gate_id)
+                write_state_atomic(path, state)
+                return _coding_execution_public_state(state)
+            if not isinstance(reservation, dict):
+                _raise("WORKFLOW_INVALID_INPUT", "coding_execution.reserved_attempt", "no attempt is reserved")
+            for field_name in (
+                "number",
+                "reserved_at_utc",
+                "parent_candidate_id",
+                "kind",
+                "remaining_before",
+                "remaining_after",
+            ):
+                if record["attempt"][field_name] != reservation[field_name]:
+                    _raise(
+                        "WORKFLOW_INVALID_INPUT",
+                        f"coding_execution.record.attempt.{field_name}",
+                        "record does not match the reserved attempt",
+                    )
+            slot = record["slot"]
+            if (
+                slot["state_before"] != state["state"]
+                or slot["active_candidate_before"] != state["active_candidate_id"]
+                or slot["historical_candidate_ids"] != state["historical_candidate_ids"]
+            ):
+                _raise("WORKFLOW_INVALID_INPUT", "coding_execution.record.slot", "record does not match current slot state")
+            if record["outcome"] == "CANDIDATE_READY":
+                candidate_id = record["candidate"]["candidate_id"]
+                version = record["candidate"]["version"]
+                expected_state = f"FROZEN_REVIEW_V{version}"
+                if slot["state_after"] != expected_state or slot["active_candidate_after"] != candidate_id:
+                    _raise("WORKFLOW_INVALID_INPUT", "coding_execution.record.slot", "candidate install transition is invalid")
+                state["state"] = expected_state
+                state["active_candidate_id"] = candidate_id
+            else:
+                if slot["state_after"] != state["state"] or slot["active_candidate_after"] != state["active_candidate_id"]:
+                    _raise("WORKFLOW_INVALID_INPUT", "coding_execution.record.slot", "noncandidate outcome cannot change the slot")
+            state["reserved_attempt"] = None
+            state["records"].append(record)
+            _validate_coding_execution_state(state, gate_id=gate_id)
+            write_state_atomic(path, state)
+            return _coding_execution_public_state(state)
+
+    def _read_coding_execution_state(self, gate_id: str) -> dict[str, Any]:
+        path = self.coding_execution_slot_path(gate_id)
+        try:
+            state = _read_json_mapping(path, code="WORKFLOW_STATE_CORRUPT", issue_path="coding_execution")
+        except FileNotFoundError:
+            _raise("WORKFLOW_STATE_CORRUPT", "coding_execution", "coding execution gate is not initialized")
+        _validate_coding_execution_state(state, gate_id=gate_id)
+        return state
 
     def write_task_state(self, state: dict[str, Any]) -> None:
         outcome = validate_task_state(state)
@@ -1149,6 +1680,114 @@ class WorkflowStore:
         if payload.get("task_id") != task_id:
             _raise("WORKFLOW_STATE_CORRUPT", "task_state.task_id", "task-state payload must match requested task_id")
         return payload
+
+    def read_waiting_human_decisions(self) -> dict[str, str]:
+        with self._connection() as connection:
+            rows = connection.execute("SELECT task_id, state_json FROM task_states ORDER BY task_id").fetchall()
+        waiting: dict[str, str] = {}
+        for task_id, state_json in rows:
+            payload = _loads_json_mapping(state_json, code="WORKFLOW_STATE_CORRUPT", issue_path="task_state")
+            outcome = validate_task_state(payload)
+            if not outcome.valid:
+                _raise_outcome(outcome)
+            if payload.get("task_id") != task_id:
+                _raise("WORKFLOW_STATE_CORRUPT", "task_state.task_id", "task-state row identity mismatch")
+            if payload["current_state"] == "WAITING_HUMAN":
+                pending_decision_id = payload["pending_decision_id"]
+                if not isinstance(pending_decision_id, str):
+                    _raise(
+                        "WORKFLOW_STATE_CORRUPT",
+                        "task_state.pending_decision_id",
+                        "WAITING_HUMAN state requires a pending decision identity",
+                    )
+                waiting[task_id] = pending_decision_id
+        return waiting
+
+    def has_committed_decision_resolution(self, resolution: dict[str, Any]) -> bool:
+        task_id = resolution["task_id"]
+        _require_safe_id(task_id, "task_id")
+        state = self.read_task_state(task_id)
+        generation = state["audit_generation"]
+        expected_head_event_id: str | None = state["audit_head_event_id"]
+        expected_head_sequence: int | None = None
+        expected_head_hash = state["audit_head_hash"]
+        current_generation = generation
+        resolution_found = False
+        visited: set[int] = set()
+        with self._connection() as connection:
+            while True:
+                if generation in visited or generation < 1 or generation > current_generation:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_generation", "audit generation lineage is cyclic or invalid")
+                visited.add(generation)
+                rows = connection.execute(
+                    """
+                    SELECT sequence, event_json
+                    FROM audit_events
+                    WHERE task_id = ? AND generation = ?
+                    ORDER BY sequence
+                    """,
+                    (task_id, generation),
+                ).fetchall()
+                prefix: list[dict[str, Any]] = []
+                previous_hash = None
+                head_index = None
+                for expected_sequence, row in enumerate(rows, start=1):
+                    if row[0] != expected_sequence:
+                        _raise("WORKFLOW_AUDIT_CORRUPT", "sequence", "authoritative audit sequence is not contiguous")
+                    event = _loads_json_mapping(row[1], code="WORKFLOW_AUDIT_CORRUPT", issue_path="audit_event")
+                    outcome = validate_audit_event(event)
+                    if not outcome.valid:
+                        _raise_outcome(outcome)
+                    if (
+                        event["task_id"] != task_id
+                        or event["project_id"] != state["project_id"]
+                        or event["generation"] != generation
+                        or event["sequence"] != expected_sequence
+                        or event["previous_event_hash"] != previous_hash
+                    ):
+                        _raise("WORKFLOW_AUDIT_CORRUPT", "audit_event", "audit prefix identity or hash chain mismatch")
+                    prefix.append(event)
+                    previous_hash = event["event_hash"]
+                    if event["event_hash"] == expected_head_hash:
+                        head_index = len(prefix) - 1
+                        break
+                if head_index is None:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_head_hash", "trusted audit head is missing")
+                head = prefix[head_index]
+                if expected_head_event_id is not None and head["event_id"] != expected_head_event_id:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_head_event_id", "trusted audit head event identity mismatch")
+                if expected_head_sequence is not None and head["sequence"] != expected_head_sequence:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_head_sequence", "trusted audit head sequence mismatch")
+                if generation == current_generation and head_index != len(rows) - 1:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_head_hash", "current audit head is not the authoritative tail")
+                resolution_found = resolution_found or any(
+                    isinstance(binding := event.get("decision_resolution_binding"), dict)
+                    and binding.get("embedded_record") == resolution
+                    for event in prefix
+                )
+                generation_record = prefix[0].get("details", {}).get("audit_generation")
+                if not isinstance(generation_record, dict) or generation_record.get("generation") != generation:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_generation", "audit generation start record is missing")
+                predecessor = generation_record.get("predecessor_generation")
+                predecessor_hash = generation_record.get("predecessor_valid_head_hash")
+                if predecessor is None:
+                    if generation != 1 or predecessor_hash is not None:
+                        _raise("WORKFLOW_AUDIT_CORRUPT", "audit_generation", "audit lineage ended before generation one")
+                    break
+                if not isinstance(predecessor, int) or isinstance(predecessor, bool) or predecessor >= generation:
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "audit_generation.predecessor_generation", "audit predecessor is invalid")
+                trusted_prefix = prefix[0].get("details", {}).get("previous_trusted_prefix")
+                if (
+                    not isinstance(trusted_prefix, dict)
+                    or trusted_prefix.get("generation") != predecessor
+                    or trusted_prefix.get("event_hash") != predecessor_hash
+                ):
+                    _raise("WORKFLOW_AUDIT_CORRUPT", "previous_trusted_prefix", "audit predecessor binding mismatch")
+                generation = predecessor
+                expected_head_event_id = trusted_prefix.get("event_id")
+                expected_head_sequence = trusted_prefix.get("sequence")
+                expected_head_hash = predecessor_hash
+        return resolution_found
 
     def read_audit_events(self, task_id: str, *, generation: int = 1) -> list[dict[str, Any]]:
         _require_safe_id(task_id, "task_id")

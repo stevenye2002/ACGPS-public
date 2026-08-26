@@ -123,20 +123,31 @@ class DeterministicSourceArchiveTests(unittest.TestCase):
             with self.assertRaises(SourceArchiveError):
                 build_source_archive(root, Path(tmp) / "staged-deletion.zip")
 
-    def test_supported_environment_is_exactly_windows_python_3_13(self) -> None:
+    def test_supported_environment_is_exactly_windows_server_2022_python_3_13(self) -> None:
         self.assertEqual(
-            validate_supported_environment("win32", (3, 13, 13)),
-            {"platform": "win32", "python": "3.13.13"},
+            validate_supported_environment("win32", (3, 13, 13), "2022Server"),
+            {
+                "platform": "win32",
+                "profile": "WINDOWS_SERVER_2022",
+                "python": "3.13.13",
+                "windows_release": "2022Server",
+            },
         )
-        for platform_name, version_info in (
-            ("linux", (3, 13, 13)),
-            ("darwin", (3, 13, 13)),
-            ("win32", (3, 12, 9)),
-            ("win32", (3, 14, 0)),
+        for platform_name, version_info, windows_release in (
+            ("linux", (3, 13, 13), "2022Server"),
+            ("darwin", (3, 13, 13), "2022Server"),
+            ("win32", (3, 12, 9), "2022Server"),
+            ("win32", (3, 14, 0), "2022Server"),
+            ("win32", (3, 13, 13), "11"),
+            ("win32", (3, 13, 13), "2019Server"),
         ):
-            with self.subTest(platform_name=platform_name, version_info=version_info):
+            with self.subTest(
+                platform_name=platform_name,
+                version_info=version_info,
+                windows_release=windows_release,
+            ):
                 with self.assertRaises(ReleaseReadinessError):
-                    validate_supported_environment(platform_name, version_info)
+                    validate_supported_environment(platform_name, version_info, windows_release)
 
 
 if __name__ == "__main__":
