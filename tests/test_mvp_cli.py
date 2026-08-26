@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from acgps.contracts import validate_contract
+from acgps.task_packets import generate_task_packet
 from acgps.workflow_contracts import canonical_json_bytes
 from tests.test_contracts import _valid_prelaunch_hold_coding_execution_record
 
@@ -77,6 +78,10 @@ def valid_agent_result() -> dict[str, object]:
         "blocker": None,
         "recommended_next_state": "TASK_REVIEW",
     }
+
+
+def valid_coder_packet() -> dict[str, object]:
+    return generate_task_packet("CODER", valid_intake(), valid_policy_result())
 
 
 def valid_decision_request() -> dict[str, object]:
@@ -717,6 +722,26 @@ class MVPCLITests(unittest.TestCase):
         validate_contract("agent_task_contract", packet, mode="runtime")
         self.assertEqual(json.loads(packet_path.read_text(encoding="utf-8")), packet)
 
+        coder_packet_path = self.state_root / "packets" / "coder.json"
+        coder_packet = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "CODER",
+            "--created-at-utc",
+            "2026-08-23T00:00:31Z",
+            "--output",
+            str(coder_packet_path),
+        )
+        validate_contract("agent_task_contract", coder_packet, mode="runtime")
+        self.assertEqual(coder_packet["role"], "CODER")
+        self.assertEqual(coder_packet["packet_id"], valid_agent_result()["packet_id"])
+        coder_result_path = self.state_root / "packets" / "coder-result.json"
+        coder_result_path.write_bytes(canonical_json_bytes(valid_agent_result()) + b"\n")
+
         rc_dir = self.state_root / "rc"
         source = rc_dir / "evidence" / "source-artifact.txt"
         build_artifact = rc_dir / "evidence" / "acgps-mvp-v0.1-source.zip"
@@ -731,17 +756,52 @@ class MVPCLITests(unittest.TestCase):
         rollback.write_text("Delete the local runtime state directory.\n", encoding="utf-8")
 
         transitions = [
-            ("READY_FOR_CLASSIFICATION", "PLANNER", source),
-            ("CLASSIFIED", "CONTROLLER", source),
-            ("SPEC_READY", "PLANNER", source),
-            ("PLAN_READY", "PLANNER", source),
-            ("IMPLEMENTING", "CODER", source),
-            ("TASK_REVIEW", "CODER", source),
-            ("INTEGRATING", "REVIEWER", review),
-            ("VERIFIED", "VERIFIER", verification),
+            ("READY_FOR_CLASSIFICATION", "PLANNER", [source]),
+            ("CLASSIFIED", "CONTROLLER", [source]),
+            ("SPEC_READY", "PLANNER", [source]),
+            ("PLAN_READY", "PLANNER", [source]),
+            ("IMPLEMENTING", "CODER", [source]),
+            ("TASK_REVIEW", "CODER", [coder_packet_path, coder_result_path]),
+            ("INTEGRATING", "REVIEWER", [review]),
+            ("VERIFIED", "VERIFIER", [verification]),
         ]
-        for index, (target, actor, evidence) in enumerate(transitions, start=1):
-            state = self._run(
+        for index, (target, actor, evidence_paths) in enumerate(transitions, start=1):
+            if target == "TASK_REVIEW":
+                before = self._run(
+                    "task",
+                    "status",
+                    *self._engine_arguments(),
+                    "--task-id",
+                    "ftic-governance-1",
+                    "--include-audit",
+                )
+                rejection = self._run(
+                    "task",
+                    "advance",
+                    *self._engine_arguments(),
+                    "--task-id",
+                    "ftic-governance-1",
+                    "--to-state",
+                    target,
+                    "--actor",
+                    actor,
+                    "--created-at-utc",
+                    f"2026-08-23T00:{index:02d}:00Z",
+                    "--evidence",
+                    str(source),
+                    expected_exit=2,
+                )
+                self.assertEqual(rejection["status"], "REJECTED")
+                after = self._run(
+                    "task",
+                    "status",
+                    *self._engine_arguments(),
+                    "--task-id",
+                    "ftic-governance-1",
+                    "--include-audit",
+                )
+                self.assertEqual(after, before)
+            arguments = [
                 "task",
                 "advance",
                 *self._engine_arguments(),
@@ -753,9 +813,10 @@ class MVPCLITests(unittest.TestCase):
                 actor,
                 "--created-at-utc",
                 f"2026-08-23T00:{index:02d}:00Z",
-                "--evidence",
-                str(evidence),
-            )
+            ]
+            for evidence_path in evidence_paths:
+                arguments.extend(("--evidence", str(evidence_path)))
+            state = self._run(*arguments)
             self.assertEqual(state["current_state"], target)
 
         manifest_result = self._run(

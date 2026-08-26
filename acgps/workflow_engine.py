@@ -15,6 +15,7 @@ from acgps.review_adapter import (
     validate_review_findings,
     verify_release_candidate_manifest,
 )
+from acgps.supervised_handoff import build_supervised_coder_result_receipt_preview
 from acgps.workflow_contracts import (
     canonical_json_bytes,
     validate_task_initialization_request,
@@ -201,6 +202,7 @@ class WorkflowEngine:
         required_actor = {
             "FIX_REQUIRED": "REVIEWER",
             "INTEGRATING": "REVIEWER",
+            "TASK_REVIEW": "CODER",
             "VERIFIED": "VERIFIER",
         }.get(actual_target)
         if required_actor is not None and actor != required_actor:
@@ -371,6 +373,8 @@ class WorkflowEngine:
                     raise WorkflowEngineError(
                         "INTEGRATING requires closed review evidence for: " + ", ".join(missing_ids)
                     )
+            elif target == "TASK_REVIEW":
+                self._validate_task_review_evidence(paths, current)
             elif target == "VERIFIED":
                 verified = False
                 boundary = self._fix_cycle_integration_boundary(current)
@@ -401,6 +405,33 @@ class WorkflowEngine:
                     raise WorkflowEngineError("RC_READY requires a valid release-candidate manifest")
         except (ContractValidationError, ReviewEvidenceError) as exc:
             raise WorkflowEngineError(str(exc)) from exc
+
+    def _validate_task_review_evidence(
+        self,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> None:
+        if len(paths) != 2:
+            raise WorkflowEngineError(
+                "TASK_REVIEW requires the canonical CODER packet and result as exactly two evidence files"
+            )
+        packet = self._read_canonical_evidence_json(paths[0])
+        agent_result = self._read_canonical_evidence_json(paths[1])
+        try:
+            build_supervised_coder_result_receipt_preview(packet, agent_result)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            packet["project_id"] != current["project_id"]
+            or packet["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "CODER packet project_id and task_id must match the current task"
+            )
+        if agent_result["status"] not in {"DONE", "DONE_WITH_CONCERNS"}:
+            raise WorkflowEngineError("TASK_REVIEW requires a completed CODER result")
+        if agent_result["recommended_next_state"] != "TASK_REVIEW":
+            raise WorkflowEngineError("CODER result must recommend TASK_REVIEW")
 
     def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
         blocker_ids: set[str] = set()
@@ -611,6 +642,38 @@ class WorkflowEngine:
             raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
         if not isinstance(record, dict):
             raise WorkflowEngineError(f"evidence must be a mapping: {path}")
+        return record
+
+    def _read_canonical_evidence_json(self, path: Path) -> dict[str, Any]:
+        _, resolved = self._evidence_location(path)
+        try:
+            payload = resolved.read_bytes()
+            text = payload.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
+
+        def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            record: dict[str, Any] = {}
+            folded: set[str] = set()
+            for key, value in pairs:
+                if key in record or key.casefold() in folded:
+                    raise WorkflowEngineError(
+                        f"evidence has a duplicate or case-fold-colliding JSON key: {key}"
+                    )
+                record[key] = value
+                folded.add(key.casefold())
+            return record
+
+        try:
+            record = json.loads(text, object_pairs_hook=reject_duplicate_pairs)
+        except json.JSONDecodeError as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
+        if not isinstance(record, dict):
+            raise WorkflowEngineError(f"evidence must be a mapping: {path}")
+        if canonical_json_bytes(record) + b"\n" != payload:
+            raise WorkflowEngineError(
+                f"evidence must use canonical JSON bytes with one terminal LF: {path}"
+            )
         return record
 
     @staticmethod

@@ -62,6 +62,23 @@ non-`CODER` records, and unsafe claimed file paths. It remains non-authoritative
 the reported next state is only the coder's recommendation, and a separate
 operator-authorized workflow transition is still required.
 
+For that operator-authorized transition, provide the same canonical packet first
+and canonical result second. The controller admits `IMPLEMENTING -> TASK_REVIEW`
+only for actor `CODER`, a `DONE` or `DONE_WITH_CONCERNS` result bound to the
+current project/task packet, and an explicit `TASK_REVIEW` recommendation:
+
+```powershell
+python -m acgps task advance <engine arguments> `
+  --task-id TASK_ID --to-state TASK_REVIEW --actor CODER `
+  --created-at-utc 2026-08-27T00:00:00Z `
+  --evidence path/to/coder-packet.json `
+  --evidence path/to/coder-result.json
+```
+
+Both raw evidence files are SHA-256-bound into the append-only transition audit.
+Entering `TASK_REVIEW` requests independent review; it does not verify, accept,
+release, or execute the coder's result.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs

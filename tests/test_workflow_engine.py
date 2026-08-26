@@ -11,6 +11,8 @@ from unittest.mock import patch
 from acgps.review_adapter import build_release_candidate_manifest
 from acgps.workflow_contracts import canonical_json_bytes
 from tests.test_mvp_cli import (
+    valid_agent_result,
+    valid_coder_packet,
     valid_decision_request,
     valid_intake,
     valid_review_finding,
@@ -30,7 +32,17 @@ def tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
-def advance_to_task_review(engine, *, hour: int) -> Path:
+def write_task_review_evidence(engine) -> list[Path]:
+    evidence_dir = engine.state_root / "task-review-evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    packet_path = evidence_dir / "coder-packet.json"
+    result_path = evidence_dir / "coder-result.json"
+    packet_path.write_bytes(canonical_json_bytes(valid_coder_packet()) + b"\n")
+    result_path.write_bytes(canonical_json_bytes(valid_agent_result()) + b"\n")
+    return [packet_path, result_path]
+
+
+def advance_to_implementing(engine, *, hour: int) -> Path:
     engine.intake(valid_intake())
     evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
     for minute, target in enumerate(
@@ -40,7 +52,6 @@ def advance_to_task_review(engine, *, hour: int) -> Path:
             "SPEC_READY",
             "PLAN_READY",
             "IMPLEMENTING",
-            "TASK_REVIEW",
         ),
         start=1,
     ):
@@ -51,6 +62,18 @@ def advance_to_task_review(engine, *, hour: int) -> Path:
             evidence_paths=[evidence],
             created_at_utc=f"2026-08-23T{hour:02d}:{minute:02d}:00Z",
         )
+    return evidence
+
+
+def advance_to_task_review(engine, *, hour: int) -> Path:
+    evidence = advance_to_implementing(engine, hour=hour)
+    engine.advance(
+        "ftic-governance-1",
+        "TASK_REVIEW",
+        actor="CODER",
+        evidence_paths=write_task_review_evidence(engine),
+        created_at_utc=f"2026-08-23T{hour:02d}:06:00Z",
+    )
     return evidence
 
 
@@ -134,6 +157,92 @@ def start_recovery_generation(engine, state: dict[str, object], *, created_at_ut
 
 
 class WorkflowEngineTests(unittest.TestCase):
+    def test_task_review_rejects_unbound_evidence_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            generic_evidence = advance_to_implementing(engine, hour=16)
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "TASK_REVIEW requires the canonical CODER packet and result",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "TASK_REVIEW",
+                    actor="CODER",
+                    evidence_paths=[generic_evidence],
+                    created_at_utc="2026-08-23T16:06:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_task_review_requires_current_completed_coder_result_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        packet = valid_coder_packet()
+        result = valid_agent_result()
+        cases = (
+            (
+                "wrong actor",
+                "CONTROLLER",
+                packet,
+                result,
+                "TASK_REVIEW requires actor CODER",
+            ),
+            (
+                "wrong task",
+                "CODER",
+                dict(packet, task_id="other-task"),
+                result,
+                "project_id and task_id must match",
+            ),
+            (
+                "mismatched packet",
+                "CODER",
+                packet,
+                dict(result, packet_id="other-coder-v1"),
+                "packet_id does not match",
+            ),
+            (
+                "unfinished result",
+                "CODER",
+                packet,
+                dict(result, status="NEEDS_CONTEXT"),
+                "completed CODER result",
+            ),
+            (
+                "wrong next state",
+                "CODER",
+                packet,
+                dict(result, recommended_next_state="WAITING_HUMAN"),
+                "recommend TASK_REVIEW",
+            ),
+        )
+        for name, actor, candidate_packet, candidate_result, message in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                advance_to_implementing(engine, hour=17)
+                packet_path, result_path = write_task_review_evidence(engine)
+                packet_path.write_bytes(canonical_json_bytes(candidate_packet) + b"\n")
+                result_path.write_bytes(canonical_json_bytes(candidate_result) + b"\n")
+                before = tree_bytes(state_root)
+
+                with self.assertRaisesRegex(WorkflowEngineError, message):
+                    engine.advance(
+                        "ftic-governance-1",
+                        "TASK_REVIEW",
+                        actor=actor,
+                        evidence_paths=[packet_path, result_path],
+                        created_at_utc="2026-08-23T17:06:00Z",
+                    )
+
+                self.assertEqual(tree_bytes(state_root), before)
+
     def test_governance_task_reaches_rc_ready_with_independent_evidence(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
@@ -150,6 +259,7 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(state["current_state"], "DRAFT")
 
             generic_evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            task_review_evidence = write_task_review_evidence(engine)
             for target in (
                 "READY_FOR_CLASSIFICATION",
                 "CLASSIFIED",
@@ -161,14 +271,21 @@ class WorkflowEngineTests(unittest.TestCase):
                 state = engine.advance(
                     "ftic-governance-1",
                     target,
-                    actor="CONTROLLER",
-                    evidence_paths=[generic_evidence],
+                    actor="CODER" if target == "TASK_REVIEW" else "CONTROLLER",
+                    evidence_paths=(
+                        task_review_evidence if target == "TASK_REVIEW" else [generic_evidence]
+                    ),
                     created_at_utc="2026-08-23T01:00:00Z",
                 )
                 self.assertEqual(state["current_state"], target)
+            task_review_bindings = engine.audit("ftic-governance-1")[-1]["evidence_bindings"]
+            self.assertEqual(
+                [binding["content_sha256"] for binding in task_review_bindings],
+                [hashlib.sha256(path.read_bytes()).hexdigest() for path in task_review_evidence],
+            )
 
             evidence_dir = state_root / "evidence"
-            evidence_dir.mkdir()
+            evidence_dir.mkdir(exist_ok=True)
             review_path = evidence_dir / "review.json"
             review_path.write_text(json.dumps(valid_review_finding(), sort_keys=True) + "\n", encoding="utf-8")
             with self.assertRaises(WorkflowEngineError):
@@ -334,7 +451,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "TASK_REVIEW",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_task_review_evidence(engine),
                 created_at_utc="2026-08-23T12:09:00Z",
             )
             engine.advance(
@@ -355,7 +472,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "TASK_REVIEW",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_task_review_evidence(engine),
                 created_at_utc="2026-08-23T12:12:00Z",
             )
             closed_a = evidence_dir / "closed-a.json"
@@ -412,7 +529,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "TASK_REVIEW",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_task_review_evidence(engine),
                 created_at_utc="2026-08-23T13:09:00Z",
             )
             tampered = json.loads(original)
@@ -472,7 +589,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "TASK_REVIEW",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_task_review_evidence(engine),
                 created_at_utc="2026-08-23T14:10:00Z",
             )
             unrelated = evidence_dir / "closed-b.json"
@@ -531,7 +648,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "TASK_REVIEW",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_task_review_evidence(engine),
                 created_at_utc="2026-08-23T15:09:00Z",
             )
             engine.advance(
