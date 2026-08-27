@@ -209,6 +209,7 @@ class WorkflowEngine:
             ("CLASSIFIED", "SPEC_READY"): "PLANNER",
             ("SPEC_READY", "PLAN_READY"): "PLANNER",
             ("PLAN_READY", "IMPLEMENTING"): "CODER",
+            ("FIX_REQUIRED", "IMPLEMENTING"): "CODER",
         }.get((current["current_state"], actual_target)) or {
             "FIX_REQUIRED": "REVIEWER",
             "INTEGRATING": "REVIEWER",
@@ -382,6 +383,8 @@ class WorkflowEngine:
                 return self._validate_planner_transition_evidence(target, paths, current)
             if (current["current_state"], target) == ("PLAN_READY", "IMPLEMENTING"):
                 return self._validate_coder_handoff_evidence(paths, current)
+            if (current["current_state"], target) == ("FIX_REQUIRED", "IMPLEMENTING"):
+                return self._validate_coder_remediation_handoff_evidence(paths, current)
             if (
                 current["current_state"] == "TASK_REVIEW"
                 and target in {"FIX_REQUIRED", "INTEGRATING"}
@@ -469,25 +472,45 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 "CODER packet project_id and task_id must match the current task"
             )
-
-        events = self._trusted_audit_lineage(current)
-        latest_transition = next(
-            (
-                event
-                for event in reversed(events)
-                if event["event_type"] == "TRANSITION_ACCEPTED"
-            ),
-            None,
+        self._validate_coder_packet_against_frozen_plan(
+            packet,
+            current,
+            require_latest_transition=True,
         )
+        return [packet_snapshot]
+
+    def _validate_coder_packet_against_frozen_plan(
+        self,
+        packet: dict[str, Any],
+        current: dict[str, Any],
+        *,
+        require_latest_transition: bool,
+    ) -> None:
+        events = self._trusted_audit_lineage(current)
+        transitions = [
+            event for event in events if event["event_type"] == "TRANSITION_ACCEPTED"
+        ]
+        if require_latest_transition:
+            plan_boundary = transitions[-1] if transitions else None
+        else:
+            plan_boundary = next(
+                (
+                    event
+                    for event in reversed(transitions)
+                    if event["from_state"] == "SPEC_READY"
+                    and event["to_state"] == "PLAN_READY"
+                ),
+                None,
+            )
         if (
-            latest_transition is None
-            or latest_transition["from_state"] != "SPEC_READY"
-            or latest_transition["to_state"] != "PLAN_READY"
+            plan_boundary is None
+            or plan_boundary["from_state"] != "SPEC_READY"
+            or plan_boundary["to_state"] != "PLAN_READY"
         ):
             raise WorkflowEngineError(
                 "IMPLEMENTING requires the current frozen SPEC_READY to PLAN_READY boundary"
             )
-        planner_bindings = latest_transition["evidence_bindings"]
+        planner_bindings = plan_boundary["evidence_bindings"]
         if len(planner_bindings) != 2:
             raise WorkflowEngineError(
                 "IMPLEMENTING requires the frozen PLAN_READY PLANNER packet and result"
@@ -522,7 +545,55 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 "CODER packet must preserve the frozen PLAN_READY task boundary"
             )
-        return [packet_snapshot]
+
+    def _validate_coder_remediation_handoff_evidence(
+        self,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> list[tuple[str, int, str]]:
+        if len(paths) < 2:
+            raise WorkflowEngineError(
+                "FIX_REQUIRED to IMPLEMENTING requires the canonical CODER packet "
+                "followed by current blocking review findings"
+            )
+        packet, packet_snapshot = self._read_canonical_evidence_json(paths[0])
+        try:
+            build_supervised_coder_handoff_preview(packet)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            packet["project_id"] != current["project_id"]
+            or packet["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "CODER packet project_id and task_id must match the current task"
+            )
+        self._validate_coder_packet_against_frozen_plan(
+            packet,
+            current,
+            require_latest_transition=False,
+        )
+
+        expected_blockers = self._current_fix_cycle_blockers(current)
+        if not expected_blockers:
+            raise WorkflowEngineError(
+                "FIX_REQUIRED to IMPLEMENTING requires current blocking review findings"
+            )
+        submitted_snapshots: list[tuple[str, int, str]] = []
+        for path in paths[1:]:
+            record, snapshot = self._read_evidence_json_snapshot(path)
+            validate_contract("review_finding", record, mode="runtime")
+            if not self._is_current_fix_blocker(record):
+                raise WorkflowEngineError(
+                    "FIX_REQUIRED to IMPLEMENTING requires current blocking review findings"
+                )
+            submitted_snapshots.append(snapshot)
+        expected_snapshots = [snapshot for _, snapshot in expected_blockers]
+        if submitted_snapshots != expected_snapshots:
+            raise WorkflowEngineError(
+                "FIX_REQUIRED to IMPLEMENTING requires the exact current blocking review findings"
+            )
+        return [packet_snapshot, *submitted_snapshots]
 
     def _validate_task_review_evidence(
         self,
@@ -661,38 +732,80 @@ class WorkflowEngine:
             raise WorkflowEngineError("VERIFIED requires a successful verification record")
         return [packet_snapshot, result_snapshot, *verification_snapshots]
 
-    def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
-        blocker_ids: set[str] = set()
+    @staticmethod
+    def _is_current_fix_blocker(record: dict[str, Any]) -> bool:
+        return (
+            record["severity"] in {"P0", "P1"}
+            and record["status"] in {"OPEN", "IN_PROGRESS"}
+            and record["disposition"] in {"ACCEPTED", "PARTIAL"}
+        )
+
+    def _current_fix_cycle_blockers(
+        self,
+        current: dict[str, Any],
+    ) -> list[tuple[dict[str, Any], tuple[str, int, str]]]:
+        blocker_records: dict[str, tuple[dict[str, Any], tuple[str, int, str]]] = {}
         for event in self._current_fix_cycle_events(current):
             if event["to_state"] != "FIX_REQUIRED":
                 continue
             evidence_bindings = event["evidence_bindings"]
-            paths = [self._bound_evidence_path(binding) for binding in evidence_bindings]
-            if event["from_state"] == "TASK_REVIEW" and paths:
-                first_record = self._read_json(paths[0])
+            finding_bindings = evidence_bindings
+            if event["from_state"] == "TASK_REVIEW" and evidence_bindings:
+                first_record, _ = self._read_bound_evidence_json_snapshot(
+                    evidence_bindings[0]
+                )
                 if first_record.get("role") == "REVIEWER":
-                    if len(paths) < 3:
+                    if len(evidence_bindings) < 3:
                         raise WorkflowEngineError(
                             "stored FIX_REQUIRED reviewer evidence is incomplete"
                         )
-                    packet, _ = self._read_canonical_evidence_json(paths[0])
-                    agent_result, _ = self._read_canonical_evidence_json(paths[1])
+                    packet, _ = self._read_bound_canonical_evidence_json(
+                        evidence_bindings[0]
+                    )
+                    agent_result, _ = self._read_bound_canonical_evidence_json(
+                        evidence_bindings[1]
+                    )
                     try:
                         build_supervised_reviewer_result_receipt_preview(packet, agent_result)
                     except (ContractValidationError, ValueError) as exc:
                         raise WorkflowEngineError(
                             f"stored FIX_REQUIRED reviewer evidence is invalid: {exc}"
                         ) from exc
-                    paths = paths[2:]
-            records = validate_fix_required_findings(paths)
-            blocker_ids.update(
-                record["finding_id"]
-                for record in records
-                if record["severity"] in {"P0", "P1"}
-                and record["status"] in {"OPEN", "IN_PROGRESS"}
-                and record["disposition"] in {"ACCEPTED", "PARTIAL"}
-            )
-        return blocker_ids
+                    if (
+                        packet["project_id"] != current["project_id"]
+                        or packet["task_id"] != current["task_id"]
+                        or agent_result["status"] not in {"DONE", "DONE_WITH_CONCERNS"}
+                        or agent_result["recommended_next_state"] != "FIX_REQUIRED"
+                    ):
+                        raise WorkflowEngineError(
+                            "stored FIX_REQUIRED reviewer evidence is invalid"
+                        )
+                    finding_bindings = evidence_bindings[2:]
+            event_has_blocker = False
+            for binding in finding_bindings:
+                record, snapshot = self._read_bound_evidence_json_snapshot(binding)
+                validate_contract("review_finding", record, mode="runtime")
+                if not self._is_current_fix_blocker(record):
+                    continue
+                event_has_blocker = True
+                finding_id = record["finding_id"]
+                existing = blocker_records.get(finding_id)
+                if existing is not None and existing != (record, snapshot):
+                    raise WorkflowEngineError(
+                        f"current fix-cycle blocker identity is ambiguous: {finding_id}"
+                    )
+                blocker_records.setdefault(finding_id, (record, snapshot))
+            if not event_has_blocker:
+                raise WorkflowEngineError(
+                    "stored FIX_REQUIRED evidence has no accepted open P0 or P1 blocker"
+                )
+        return list(blocker_records.values())
+
+    def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
+        return {
+            record["finding_id"]
+            for record, _ in self._current_fix_cycle_blockers(current)
+        }
 
     def _fix_cycle_integration_boundary(self, current: dict[str, Any]) -> datetime | None:
         events = self._current_fix_cycle_events(current)
@@ -789,24 +902,6 @@ class WorkflowEngine:
             expected_head_hash = predecessor_hash
         return [event for events in reversed(generations) for event in events]
 
-    def _bound_evidence_path(self, binding: dict[str, Any]) -> Path:
-        logical_path = binding.get("path")
-        if binding.get("source") != "path" or not isinstance(logical_path, str):
-            raise WorkflowEngineError("fix-cycle evidence binding must reference a path")
-        prefix, separator, relative = logical_path.partition("/")
-        roots = {"project": self.project_root, "state": self.state_root}
-        if not separator or prefix not in roots or not relative:
-            raise WorkflowEngineError("fix-cycle evidence binding path is invalid")
-        rebound_logical, resolved = self._evidence_location(roots[prefix] / Path(relative))
-        payload = resolved.read_bytes()
-        if (
-            rebound_logical != logical_path
-            or binding.get("size_bytes") != len(payload)
-            or binding.get("content_sha256") != hashlib.sha256(payload).hexdigest()
-        ):
-            raise WorkflowEngineError("fix-cycle evidence binding content changed")
-        return resolved
-
     @staticmethod
     def _utc_instant(value: str) -> datetime:
         try:
@@ -879,16 +974,6 @@ class WorkflowEngine:
             "created_at_utc": created_at_utc,
         }
 
-    @staticmethod
-    def _read_json(path: Path) -> dict[str, Any]:
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
-        if not isinstance(record, dict):
-            raise WorkflowEngineError(f"evidence must be a mapping: {path}")
-        return record
-
     def _read_canonical_evidence_json(
         self,
         path: Path,
@@ -928,6 +1013,57 @@ class WorkflowEngine:
             raise WorkflowEngineError("bound evidence binding content changed")
         record = self._parse_canonical_evidence_json(payload, resolved)
         return record, (rebound_logical, len(payload), digest)
+
+    def _read_bound_evidence_json_snapshot(
+        self,
+        binding: dict[str, Any],
+    ) -> tuple[dict[str, Any], tuple[str, int, str]]:
+        logical_path = binding.get("path")
+        if binding.get("source") != "path" or not isinstance(logical_path, str):
+            raise WorkflowEngineError("bound evidence binding must reference a path")
+        prefix, separator, relative = logical_path.partition("/")
+        roots = {"project": self.project_root, "state": self.state_root}
+        if not separator or prefix not in roots or not relative:
+            raise WorkflowEngineError("bound evidence binding path is invalid")
+        rebound_logical, resolved = self._evidence_location(
+            roots[prefix] / Path(relative)
+        )
+        try:
+            payload = resolved.read_bytes()
+            record = json.loads(payload.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {resolved}") from exc
+        digest = hashlib.sha256(payload).hexdigest()
+        if (
+            rebound_logical != logical_path
+            or binding.get("size_bytes") != len(payload)
+            or binding.get("content_sha256") != digest
+        ):
+            raise WorkflowEngineError("bound evidence binding content changed")
+        if not isinstance(record, dict):
+            raise WorkflowEngineError(f"evidence must be a mapping: {resolved}")
+        return record, (rebound_logical, len(payload), digest)
+
+    def _bound_evidence_path(self, binding: dict[str, Any]) -> Path:
+        logical_path = binding.get("path")
+        if binding.get("source") != "path" or not isinstance(logical_path, str):
+            raise WorkflowEngineError("fix-cycle evidence binding must reference a path")
+        prefix, separator, relative = logical_path.partition("/")
+        roots = {"project": self.project_root, "state": self.state_root}
+        if not separator or prefix not in roots or not relative:
+            raise WorkflowEngineError("fix-cycle evidence binding path is invalid")
+        rebound_logical, resolved = self._evidence_location(
+            roots[prefix] / Path(relative)
+        )
+        payload = resolved.read_bytes()
+        if (
+            rebound_logical != logical_path
+            or binding.get("size_bytes") != len(payload)
+            or binding.get("content_sha256")
+            != hashlib.sha256(payload).hexdigest()
+        ):
+            raise WorkflowEngineError("fix-cycle evidence binding content changed")
+        return resolved
 
     @staticmethod
     def _parse_canonical_evidence_json(

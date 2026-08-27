@@ -110,6 +110,15 @@ def write_coder_handoff_evidence(
     return packet_path
 
 
+def write_coder_remediation_handoff_evidence(
+    engine,
+    finding_paths: list[Path],
+    *,
+    packet: dict[str, object] | None = None,
+) -> list[Path]:
+    return [write_coder_handoff_evidence(engine, packet=packet), *finding_paths]
+
+
 def valid_reviewer_packet() -> dict[str, object]:
     return generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
 
@@ -1510,13 +1519,183 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_fix_required_reentry_rejects_generic_evidence_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            generic_evidence = advance_to_task_review(engine, hour=23)
+            evidence_dir = state_root / "evidence"
+            evidence_dir.mkdir()
+            open_finding = evidence_dir / "open-a.json"
+            write_review_finding(open_finding, "finding-a", status="OPEN")
+            engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_finding],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-23T23:07:00Z",
+            )
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "FIX_REQUIRED to IMPLEMENTING requires the canonical CODER packet",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[generic_evidence],
+                    created_at_utc="2026-08-23T23:08:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_fix_required_reentry_requires_coder_actor_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=9)
+            evidence_dir = state_root / "evidence"
+            evidence_dir.mkdir()
+            open_finding = evidence_dir / "open-a.json"
+            write_review_finding(open_finding, "finding-a", status="OPEN")
+            engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_finding],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-24T09:07:00Z",
+            )
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(WorkflowEngineError, "IMPLEMENTING requires actor CODER"):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CONTROLLER",
+                    evidence_paths=[write_coder_handoff_evidence(engine), open_finding],
+                    created_at_utc="2026-08-24T09:08:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_fix_required_reentry_rejects_foreign_finding_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=8)
+            evidence_dir = state_root / "evidence"
+            evidence_dir.mkdir()
+            current_finding = evidence_dir / "open-a.json"
+            foreign_finding = evidence_dir / "open-b.json"
+            write_review_finding(current_finding, "finding-a", status="OPEN")
+            write_review_finding(foreign_finding, "finding-b", status="OPEN")
+            engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [current_finding],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-24T08:07:00Z",
+            )
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "current blocking review findings",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[
+                        write_coder_handoff_evidence(engine),
+                        foreign_finding,
+                    ],
+                    created_at_utc="2026-08-24T08:08:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_fix_required_reentry_rejects_expanded_coder_packet_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=7)
+            evidence_dir = state_root / "evidence"
+            evidence_dir.mkdir()
+            open_finding = evidence_dir / "open-a.json"
+            write_review_finding(open_finding, "finding-a", status="OPEN")
+            engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [open_finding],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-24T07:07:00Z",
+            )
+            expanded_packet = valid_coder_handoff_packet()
+            expanded_packet["binding_constraints"] = [
+                *expanded_packet["binding_constraints"],
+                "unapproved remediation scope",
+            ]
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CODER packet must preserve the frozen PLAN_READY task boundary",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[
+                        write_coder_handoff_evidence(engine, packet=expanded_packet),
+                        open_finding,
+                    ],
+                    created_at_utc="2026-08-24T07:08:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_repeated_fix_required_events_accumulate_all_blockers(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp) / "state"
             engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
-            generic_evidence = advance_to_task_review(engine, hour=12)
+            advance_to_task_review(engine, hour=12)
             evidence_dir = state_root / "evidence"
             evidence_dir.mkdir()
             open_a = evidence_dir / "open-a.json"
@@ -1539,7 +1718,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "IMPLEMENTING",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [open_a],
+                ),
                 created_at_utc="2026-08-23T12:08:00Z",
             )
             engine.advance(
@@ -1564,7 +1746,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "IMPLEMENTING",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [open_a, open_b],
+                ),
                 created_at_utc="2026-08-23T12:11:00Z",
             )
             engine.advance(
@@ -1615,7 +1800,7 @@ class WorkflowEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp) / "state"
             engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
-            generic_evidence = advance_to_task_review(engine, hour=22)
+            advance_to_task_review(engine, hour=22)
             evidence_dir = state_root / "evidence"
             evidence_dir.mkdir()
             legacy_open = evidence_dir / "legacy-open.json"
@@ -1633,7 +1818,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "IMPLEMENTING",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [legacy_open],
+                ),
                 created_at_utc="2026-08-23T22:08:00Z",
             )
             engine.advance(
@@ -1666,7 +1854,7 @@ class WorkflowEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp) / "state"
             engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
-            generic_evidence = advance_to_task_review(engine, hour=13)
+            advance_to_task_review(engine, hour=13)
             evidence_dir = state_root / "evidence"
             evidence_dir.mkdir()
             open_a = evidence_dir / "open-a.json"
@@ -1686,7 +1874,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "IMPLEMENTING",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [open_a],
+                ),
                 created_at_utc="2026-08-23T13:08:00Z",
             )
             engine.advance(
@@ -1734,7 +1925,7 @@ class WorkflowEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp) / "state"
             engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
-            generic_evidence = advance_to_task_review(engine, hour=14)
+            advance_to_task_review(engine, hour=14)
             evidence_dir = state_root / "evidence"
             evidence_dir.mkdir()
             open_a = evidence_dir / "open-a.json"
@@ -1755,7 +1946,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "IMPLEMENTING",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [open_a],
+                ),
                 created_at_utc="2026-08-23T14:09:00Z",
             )
             engine.advance(
@@ -1828,7 +2022,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "ftic-governance-1",
                 "IMPLEMENTING",
                 actor="CODER",
-                evidence_paths=[generic_evidence],
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [open_a],
+                ),
                 created_at_utc="2026-08-23T15:08:00Z",
             )
             engine.advance(

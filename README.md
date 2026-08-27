@@ -167,6 +167,15 @@ project/task packet, and recommends that exact target state. Existing finding
 severity and closure rules still apply, and every supplied evidence file is
 SHA-256-bound into the transition audit.
 
+To resume implementation from `FIX_REQUIRED`, use actor `CODER` and provide the
+original plan-bound canonical Coder packet first, followed by every current
+accepted or partially accepted open P0/P1 review finding in its trusted audit
+order. The controller
+rejects missing, reordered, additional, foreign, modified, or non-blocking
+finding evidence and any Coder packet that expands the frozen `PLAN_READY` task
+boundary. This transition records the remediation handoff; it does not launch a
+model or alter the accepted findings.
+
 ## Supervised verifier preview
 
 After generating a canonical `VERIFIER` task packet, an operator can validate
