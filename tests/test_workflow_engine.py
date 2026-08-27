@@ -1794,6 +1794,76 @@ class WorkflowEngineTests(unittest.TestCase):
             )
             self.assertEqual(integrated["current_state"], "INTEGRATING")
 
+    def test_repeated_fix_required_events_preserve_duplicate_finding_id_occurrences(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=11)
+            evidence_dir = state_root / "evidence"
+            evidence_dir.mkdir()
+            first_occurrence = evidence_dir / "first-finding-a.json"
+            second_occurrence = evidence_dir / "second-finding-a.json"
+            write_review_finding(first_occurrence, "finding-a", status="OPEN")
+            write_review_finding(second_occurrence, "finding-a", status="OPEN")
+
+            engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [first_occurrence],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-24T11:07:00Z",
+            )
+            engine.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [first_occurrence],
+                ),
+                created_at_utc="2026-08-24T11:08:00Z",
+            )
+            engine.advance(
+                "ftic-governance-1",
+                "TASK_REVIEW",
+                actor="CODER",
+                evidence_paths=write_task_review_evidence(engine),
+                created_at_utc="2026-08-24T11:09:00Z",
+            )
+            engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [second_occurrence],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-24T11:10:00Z",
+            )
+
+            try:
+                implementing = engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=write_coder_remediation_handoff_evidence(
+                        engine,
+                        [first_occurrence, second_occurrence],
+                    ),
+                    created_at_utc="2026-08-24T11:11:00Z",
+                )
+            except WorkflowEngineError as exc:
+                self.fail(f"valid duplicate finding occurrence was rejected: {exc}")
+
+            self.assertEqual(implementing["current_state"], "IMPLEMENTING")
+
     def test_reviewer_binding_preserves_legacy_fix_cycle_evidence(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 

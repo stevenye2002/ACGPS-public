@@ -744,7 +744,7 @@ class WorkflowEngine:
         self,
         current: dict[str, Any],
     ) -> list[tuple[dict[str, Any], tuple[str, int, str]]]:
-        blocker_records: dict[str, tuple[dict[str, Any], tuple[str, int, str]]] = {}
+        blocker_records: list[tuple[dict[str, Any], tuple[str, int, str]]] = []
         for event in self._current_fix_cycle_events(current):
             if event["to_state"] != "FIX_REQUIRED":
                 continue
@@ -788,18 +788,12 @@ class WorkflowEngine:
                 if not self._is_current_fix_blocker(record):
                     continue
                 event_has_blocker = True
-                finding_id = record["finding_id"]
-                existing = blocker_records.get(finding_id)
-                if existing is not None and existing != (record, snapshot):
-                    raise WorkflowEngineError(
-                        f"current fix-cycle blocker identity is ambiguous: {finding_id}"
-                    )
-                blocker_records.setdefault(finding_id, (record, snapshot))
+                blocker_records.append((record, snapshot))
             if not event_has_blocker:
                 raise WorkflowEngineError(
                     "stored FIX_REQUIRED evidence has no accepted open P0 or P1 blocker"
                 )
-        return list(blocker_records.values())
+        return blocker_records
 
     def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
         return {
