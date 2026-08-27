@@ -803,7 +803,10 @@ class WorkflowEngine:
     def _is_current_verification_failure(record: dict[str, Any]) -> bool:
         return (
             record["recommendation"] == "FIX_REQUIRED"
-            and bool(record["failed_requirements"])
+            and any(
+                requirement.strip()
+                for requirement in record["failed_requirements"]
+            )
         )
 
     def _current_fix_cycle_blockers(

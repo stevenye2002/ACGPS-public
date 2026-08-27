@@ -1605,6 +1605,34 @@ class WorkflowEngineTests(unittest.TestCase):
                 "requires failed requirements",
             ),
             (
+                "empty failed requirement",
+                dict(
+                    valid_verifier_result(),
+                    status="DONE_WITH_CONCERNS",
+                    recommended_next_state="FIX_REQUIRED",
+                ),
+                dict(
+                    valid_verification_record(),
+                    failed_requirements=[""],
+                    recommendation="FIX_REQUIRED",
+                ),
+                "requires failed requirements",
+            ),
+            (
+                "whitespace-only failed requirement",
+                dict(
+                    valid_verifier_result(),
+                    status="DONE_WITH_CONCERNS",
+                    recommended_next_state="FIX_REQUIRED",
+                ),
+                dict(
+                    valid_verification_record(),
+                    failed_requirements=["   "],
+                    recommendation="FIX_REQUIRED",
+                ),
+                "requires failed requirements",
+            ),
+            (
                 "foreign verification record",
                 dict(
                     valid_verifier_result(),
