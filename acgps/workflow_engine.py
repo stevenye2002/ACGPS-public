@@ -492,10 +492,12 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 "IMPLEMENTING requires the frozen PLAN_READY PLANNER packet and result"
             )
-        planner_packet_path = self._bound_evidence_path(planner_bindings[0])
-        planner_result_path = self._bound_evidence_path(planner_bindings[1])
-        planner_packet, _ = self._read_canonical_evidence_json(planner_packet_path)
-        planner_result, _ = self._read_canonical_evidence_json(planner_result_path)
+        planner_packet, _ = self._read_bound_canonical_evidence_json(
+            planner_bindings[0]
+        )
+        planner_result, _ = self._read_bound_canonical_evidence_json(
+            planner_bindings[1]
+        )
         try:
             build_supervised_planner_result_receipt_preview(
                 planner_packet,
@@ -894,8 +896,47 @@ class WorkflowEngine:
         logical_path, resolved = self._evidence_location(path)
         try:
             payload = resolved.read_bytes()
+        except OSError as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
+        record = self._parse_canonical_evidence_json(payload, path)
+        return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
+
+    def _read_bound_canonical_evidence_json(
+        self,
+        binding: dict[str, Any],
+    ) -> tuple[dict[str, Any], tuple[str, int, str]]:
+        logical_path = binding.get("path")
+        if binding.get("source") != "path" or not isinstance(logical_path, str):
+            raise WorkflowEngineError("bound evidence binding must reference a path")
+        prefix, separator, relative = logical_path.partition("/")
+        roots = {"project": self.project_root, "state": self.state_root}
+        if not separator or prefix not in roots or not relative:
+            raise WorkflowEngineError("bound evidence binding path is invalid")
+        rebound_logical, resolved = self._evidence_location(
+            roots[prefix] / Path(relative)
+        )
+        try:
+            payload = resolved.read_bytes()
+        except OSError as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {resolved}") from exc
+        digest = hashlib.sha256(payload).hexdigest()
+        if (
+            rebound_logical != logical_path
+            or binding.get("size_bytes") != len(payload)
+            or binding.get("content_sha256") != digest
+        ):
+            raise WorkflowEngineError("bound evidence binding content changed")
+        record = self._parse_canonical_evidence_json(payload, resolved)
+        return record, (rebound_logical, len(payload), digest)
+
+    @staticmethod
+    def _parse_canonical_evidence_json(
+        payload: bytes,
+        path: Path,
+    ) -> dict[str, Any]:
+        try:
             text = payload.decode("utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+        except UnicodeDecodeError as exc:
             raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
 
         def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -920,7 +961,7 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 f"evidence must use canonical JSON bytes with one terminal LF: {path}"
             )
-        return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
+        return record
 
     def _read_evidence_json_snapshot(
         self,

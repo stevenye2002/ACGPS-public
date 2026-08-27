@@ -793,6 +793,66 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_implementing_rejects_planner_packet_replaced_after_bound_read(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(engine, hour=10)
+            planner_binding = engine.audit("ftic-governance-1")[-1][
+                "evidence_bindings"
+            ][0]
+            planner_packet_path = engine._bound_evidence_path(planner_binding)
+            replacement_planner = dict(
+                valid_planner_packet(),
+                objective="Expanded objective inserted after the bound read.",
+            )
+            replacement_payload = canonical_json_bytes(replacement_planner) + b"\n"
+            replacement_coder = dict(replacement_planner)
+            replacement_coder["packet_id"] = "ftic-governance-1-coder-v1"
+            replacement_coder["role"] = "CODER"
+            coder_packet_path = write_coder_handoff_evidence(
+                engine,
+                packet=replacement_coder,
+            )
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            path_type = type(planner_packet_path)
+            original_read_bytes = path_type.read_bytes
+            replacement_performed = False
+
+            def replace_after_first_bound_read(path):
+                nonlocal replacement_performed
+                payload = original_read_bytes(path)
+                if Path(path) == planner_packet_path and not replacement_performed:
+                    planner_packet_path.write_bytes(replacement_payload)
+                    replacement_performed = True
+                return payload
+
+            with patch.object(
+                path_type,
+                "read_bytes",
+                autospec=True,
+                side_effect=replace_after_first_bound_read,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CODER packet must preserve the frozen PLAN_READY task boundary",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[coder_packet_path],
+                    created_at_utc="2026-08-27T10:05:00Z",
+                )
+
+            self.assertTrue(replacement_performed)
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_task_review_rejects_unbound_evidence_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
