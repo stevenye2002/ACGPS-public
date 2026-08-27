@@ -15,6 +15,8 @@ from acgps.supervised_handoff import (
     build_supervised_coder_result_receipt_preview,
     build_supervised_reviewer_handoff_preview,
     build_supervised_reviewer_result_receipt_preview,
+    build_supervised_verifier_handoff_preview,
+    build_supervised_verifier_result_receipt_preview,
 )
 from acgps.task_packets import generate_task_packet
 from acgps.workflow_engine import WorkflowEngine
@@ -179,6 +181,14 @@ def _build_parser() -> argparse.ArgumentParser:
     review_result_receipt_preview = review_commands.add_parser("result-receipt-preview")
     review_result_receipt_preview.add_argument("--packet", required=True)
     review_result_receipt_preview.add_argument("--result", required=True)
+
+    verify = commands.add_parser("verify")
+    verify_commands = verify.add_subparsers(dest="command", required=True)
+    verify_handoff_preview = verify_commands.add_parser("handoff-preview")
+    verify_handoff_preview.add_argument("--packet", required=True)
+    verify_result_receipt_preview = verify_commands.add_parser("result-receipt-preview")
+    verify_result_receipt_preview.add_argument("--packet", required=True)
+    verify_result_receipt_preview.add_argument("--result", required=True)
     return parser
 
 
@@ -324,6 +334,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         packet = _read_canonical_json_mapping(Path(args.packet))
         agent_result = _read_canonical_json_mapping(Path(args.result))
         return build_supervised_reviewer_result_receipt_preview(packet, agent_result)
+
+    if args.group == "verify" and args.command == "handoff-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        return build_supervised_verifier_handoff_preview(packet)
+
+    if args.group == "verify" and args.command == "result-receipt-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        agent_result = _read_canonical_json_mapping(Path(args.result))
+        return build_supervised_verifier_result_receipt_preview(packet, agent_result)
 
     raise ValueError("unsupported command")
 

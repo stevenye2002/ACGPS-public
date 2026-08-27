@@ -109,6 +109,28 @@ project/task packet, and recommends that exact target state. Existing finding
 severity and closure rules still apply, and every supplied evidence file is
 SHA-256-bound into the transition audit.
 
+## Supervised verifier preview
+
+After generating a canonical `VERIFIER` task packet, an operator can validate
+and preview the handoff without launching a model or writing workflow state:
+
+```powershell
+python -m acgps verify handoff-preview --packet path/to/verifier-packet.json
+```
+
+When the supervised verifier returns an `AGENT_RESULT` record, the operator can
+validate its contract, role, packet identity, and safe relative file claims:
+
+```powershell
+python -m acgps verify result-receipt-preview `
+  --packet path/to/verifier-packet.json `
+  --result path/to/verifier-result.json
+```
+
+Both commands write only to stdout. They do not launch a process, change
+workflow state, inspect verification records, or authorize `INTEGRATING ->
+VERIFIED`; those remain separate controller operations.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs

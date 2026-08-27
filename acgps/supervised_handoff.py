@@ -100,6 +100,12 @@ def build_supervised_reviewer_handoff_preview(packet: dict[str, Any]) -> dict[st
     return _build_supervised_handoff_preview(packet, role="REVIEWER")
 
 
+def build_supervised_verifier_handoff_preview(packet: dict[str, Any]) -> dict[str, Any]:
+    """Return a validated, non-authoritative preview for a human-supervised verifier."""
+
+    return _build_supervised_handoff_preview(packet, role="VERIFIER")
+
+
 def _build_supervised_result_receipt_preview(
     packet: dict[str, Any],
     agent_result: dict[str, Any],
@@ -158,4 +164,17 @@ def build_supervised_reviewer_result_receipt_preview(
         packet,
         agent_result,
         role="REVIEWER",
+    )
+
+
+def build_supervised_verifier_result_receipt_preview(
+    packet: dict[str, Any],
+    agent_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a validated, non-authoritative verifier result receipt preview."""
+
+    return _build_supervised_result_receipt_preview(
+        packet,
+        agent_result,
+        role="VERIFIER",
     )

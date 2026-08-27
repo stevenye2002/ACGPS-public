@@ -300,6 +300,99 @@ class SupervisedReviewerHandoffTests(unittest.TestCase):
             self._result_builder()(packet, self._valid_result(packet))
 
 
+class SupervisedVerifierHandoffTests(unittest.TestCase):
+    @staticmethod
+    def _valid_result(packet: dict[str, object]) -> dict[str, object]:
+        return dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="VERIFIER",
+            changed_files=[],
+            created_files=[],
+            recommended_next_state="VERIFIED",
+        )
+
+    def test_builds_deterministic_validated_no_launch_preview(self) -> None:
+        packet = generate_task_packet("VERIFIER", valid_intake(), valid_policy_result())
+
+        preview = supervised_handoff.build_supervised_verifier_handoff_preview(packet)
+
+        self.assertEqual(preview["status"], "HANDOFF_PREVIEW")
+        self.assertEqual(preview["mode"], "HUMAN_SUPERVISED")
+        self.assertEqual(preview["packet"], packet)
+        self.assertEqual(
+            preview["packet_sha256"],
+            hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+        )
+        self.assertEqual(
+            preview["controls"],
+            {
+                "model_execution": "NOT_STARTED",
+                "operator_authorization_required": True,
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+            },
+        )
+
+    def test_rejects_non_verifier_packet(self) -> None:
+        packet = generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
+
+        with self.assertRaisesRegex(ValueError, "VERIFIER"):
+            supervised_handoff.build_supervised_verifier_handoff_preview(packet)
+
+    def test_builds_deterministic_validated_result_receipt_preview(self) -> None:
+        packet = generate_task_packet("VERIFIER", valid_intake(), valid_policy_result())
+        agent_result = self._valid_result(packet)
+
+        preview = supervised_handoff.build_supervised_verifier_result_receipt_preview(
+            packet,
+            agent_result,
+        )
+
+        self.assertEqual(preview["status"], "RESULT_RECEIPT_PREVIEW")
+        self.assertEqual(preview["mode"], "HUMAN_SUPERVISED")
+        self.assertEqual(preview["packet_id"], packet["packet_id"])
+        self.assertEqual(
+            preview["packet_sha256"],
+            hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+        )
+        self.assertEqual(preview["agent_result"], agent_result)
+        self.assertEqual(
+            preview["agent_result_sha256"],
+            hashlib.sha256(canonical_json_bytes(agent_result)).hexdigest(),
+        )
+        self.assertEqual(
+            preview["controls"],
+            {
+                "model_execution": "NOT_STARTED",
+                "operator_authorization_required": True,
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        )
+
+    def test_result_receipt_rejects_non_verifier_records(self) -> None:
+        verifier_packet = generate_task_packet(
+            "VERIFIER", valid_intake(), valid_policy_result()
+        )
+        reviewer_packet = generate_task_packet(
+            "REVIEWER", valid_intake(), valid_policy_result()
+        )
+        cases = (
+            (reviewer_packet, dict(self._valid_result(reviewer_packet), role="VERIFIER")),
+            (verifier_packet, dict(self._valid_result(verifier_packet), role="REVIEWER")),
+        )
+
+        for packet, agent_result in cases:
+            with self.subTest(packet_role=packet["role"], result_role=agent_result["role"]):
+                with self.assertRaisesRegex(ValueError, "VERIFIER"):
+                    supervised_handoff.build_supervised_verifier_result_receipt_preview(
+                        packet,
+                        agent_result,
+                    )
+
+
 class WindowsPathSafetyTests(unittest.TestCase):
     WINDOWS_UNSAFE_PATHS = (
         "docs/spec.md:stream",
@@ -322,19 +415,25 @@ class WindowsPathSafetyTests(unittest.TestCase):
 
     @staticmethod
     def _result(packet: dict[str, object], role: str) -> dict[str, object]:
+        recommended_next_state = {
+            "CODER": "TASK_REVIEW",
+            "REVIEWER": "INTEGRATING",
+            "VERIFIER": "VERIFIED",
+        }[role]
         return dict(
             valid_agent_result(),
             packet_id=packet["packet_id"],
             role=role,
             changed_files=[],
             created_files=[],
-            recommended_next_state=("TASK_REVIEW" if role == "CODER" else "INTEGRATING"),
+            recommended_next_state=recommended_next_state,
         )
 
     def test_rejects_windows_unsafe_packet_components_for_all_supervised_roles(self) -> None:
         builders = {
             "CODER": supervised_handoff.build_supervised_coder_handoff_preview,
             "REVIEWER": supervised_handoff.build_supervised_reviewer_handoff_preview,
+            "VERIFIER": supervised_handoff.build_supervised_verifier_handoff_preview,
         }
 
         for role, builder in builders.items():
@@ -350,6 +449,7 @@ class WindowsPathSafetyTests(unittest.TestCase):
         builders = {
             "CODER": supervised_handoff.build_supervised_coder_result_receipt_preview,
             "REVIEWER": supervised_handoff.build_supervised_reviewer_result_receipt_preview,
+            "VERIFIER": supervised_handoff.build_supervised_verifier_result_receipt_preview,
         }
 
         for role, builder in builders.items():
