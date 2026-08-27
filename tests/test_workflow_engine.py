@@ -85,6 +85,31 @@ def write_planner_transition_evidence(
     return [packet_path, result_path]
 
 
+def valid_coder_handoff_packet() -> dict[str, object]:
+    packet = dict(valid_planner_packet())
+    packet["packet_id"] = "ftic-governance-1-coder-v1"
+    packet["role"] = "CODER"
+    return packet
+
+
+def write_coder_handoff_evidence(
+    engine,
+    *,
+    packet: dict[str, object] | None = None,
+) -> Path:
+    evidence_dir = (
+        engine.state_root
+        / "coder-handoff-evidence"
+        / f"implementing-{len(engine.audit('ftic-governance-1')) + 1:04d}"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    packet_path = evidence_dir / "coder-packet.json"
+    packet_path.write_bytes(
+        canonical_json_bytes(packet or valid_coder_handoff_packet()) + b"\n"
+    )
+    return packet_path
+
+
 def valid_reviewer_packet() -> dict[str, object]:
     return generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
 
@@ -157,6 +182,18 @@ def write_verifier_transition_evidence(
 
 
 def advance_to_implementing(engine, *, hour: int) -> Path:
+    evidence = advance_to_plan_ready(engine, hour=hour)
+    engine.advance(
+        "ftic-governance-1",
+        "IMPLEMENTING",
+        actor="CODER",
+        evidence_paths=[write_coder_handoff_evidence(engine)],
+        created_at_utc=f"2026-08-23T{hour:02d}:05:00Z",
+    )
+    return evidence
+
+
+def advance_to_plan_ready(engine, *, hour: int) -> Path:
     engine.intake(valid_intake())
     evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
     for minute, target in enumerate(
@@ -165,7 +202,6 @@ def advance_to_implementing(engine, *, hour: int) -> Path:
             "CLASSIFIED",
             "SPEC_READY",
             "PLAN_READY",
-            "IMPLEMENTING",
         ),
         start=1,
     ):
@@ -549,6 +585,214 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_implementing_requires_coder_actor_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(engine, hour=5)
+            packet_path = write_coder_handoff_evidence(engine)
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "IMPLEMENTING requires actor CODER",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CONTROLLER",
+                    evidence_paths=[packet_path],
+                    created_at_utc="2026-08-27T05:05:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_implementing_accepts_coder_packet_bound_to_plan_ready(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(engine, hour=6)
+            packet_path = write_coder_handoff_evidence(engine)
+
+            state = engine.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=[packet_path],
+                created_at_utc="2026-08-27T06:05:00Z",
+            )
+
+            self.assertEqual(state["current_state"], "IMPLEMENTING")
+            self.assertEqual(
+                engine.audit("ftic-governance-1")[-1]["evidence_bindings"][0][
+                    "content_sha256"
+                ],
+                hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+            )
+
+    def test_implementing_rejects_unbound_or_expanded_coder_packet_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        generic_evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        valid_packet = valid_coder_handoff_packet()
+        expanded_packets = (
+            ("changed objective", dict(valid_packet, objective="Expanded objective.")),
+            (
+                "changed constraints",
+                dict(
+                    valid_packet,
+                    binding_constraints=[
+                        *valid_packet["binding_constraints"],
+                        "Add an unapproved runtime.",
+                    ],
+                ),
+            ),
+            (
+                "changed non-goals",
+                dict(valid_packet, non_goals=[]),
+            ),
+            (
+                "changed paths",
+                dict(
+                    valid_packet,
+                    relevant_paths=[*valid_packet["relevant_paths"], "extra/path.py"],
+                ),
+            ),
+            (
+                "changed acceptance",
+                dict(
+                    valid_packet,
+                    acceptance_criteria=[
+                        *valid_packet["acceptance_criteria"],
+                        "Unapproved acceptance criterion.",
+                    ],
+                ),
+            ),
+        )
+        cases = [
+            (
+                "generic evidence",
+                [generic_evidence],
+                "evidence is unreadable",
+            ),
+            (
+                "wrong role",
+                valid_planner_packet(),
+                "supervised coder handoff requires a CODER task packet",
+            ),
+            (
+                "wrong task",
+                dict(valid_packet, task_id="other-task"),
+                "project_id and task_id must match",
+            ),
+            *[
+                (
+                    name,
+                    packet,
+                    "must preserve the frozen PLAN_READY task boundary",
+                )
+                for name, packet in expanded_packets
+            ],
+        ]
+        for name, candidate, message in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                advance_to_plan_ready(engine, hour=7)
+                evidence_paths = (
+                    candidate
+                    if isinstance(candidate, list)
+                    else [write_coder_handoff_evidence(engine, packet=candidate)]
+                )
+                before_state = engine.status("ftic-governance-1")
+                before_audit = engine.audit("ftic-governance-1")
+
+                with self.assertRaisesRegex(WorkflowEngineError, message):
+                    engine.advance(
+                        "ftic-governance-1",
+                        "IMPLEMENTING",
+                        actor="CODER",
+                        evidence_paths=evidence_paths,
+                        created_at_utc="2026-08-27T07:05:00Z",
+                    )
+
+                self.assertEqual(engine.status("ftic-governance-1"), before_state)
+                self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+        with self.subTest(case="extra evidence"), tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(engine, hour=8)
+            packet_path = write_coder_handoff_evidence(engine)
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "canonical CODER packet as exactly one evidence file",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[packet_path, generic_evidence],
+                    created_at_utc="2026-08-27T08:05:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_implementing_rejects_packet_replaced_after_validation_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(engine, hour=9)
+            packet_path = write_coder_handoff_evidence(engine)
+            replacement = dict(
+                valid_coder_handoff_packet(),
+                objective="Packet replaced after validation.",
+            )
+            replacement_payload = canonical_json_bytes(replacement) + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_before_binding(path, *args):
+                if Path(path) == packet_path:
+                    packet_path.write_bytes(replacement_payload)
+                return original_binding(path, *args)
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_before_binding,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "IMPLEMENTING evidence changed after validation",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[packet_path],
+                    created_at_utc="2026-08-27T09:05:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_task_review_rejects_unbound_evidence_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
@@ -868,12 +1112,14 @@ class WorkflowEngineTests(unittest.TestCase):
                     target,
                     actor=(
                         "CODER"
-                        if target == "TASK_REVIEW"
+                        if target in {"IMPLEMENTING", "TASK_REVIEW"}
                         else "PLANNER" if planner_gate else "CONTROLLER"
                     ),
                     evidence_paths=(
                         task_review_evidence
                         if target == "TASK_REVIEW"
+                        else [task_review_evidence[0]]
+                        if target == "IMPLEMENTING"
                         else write_planner_transition_evidence(engine, target=target)
                         if planner_gate
                         else [generic_evidence]

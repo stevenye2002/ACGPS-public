@@ -16,6 +16,7 @@ from acgps.review_adapter import (
     verify_release_candidate_manifest,
 )
 from acgps.supervised_handoff import (
+    build_supervised_coder_handoff_preview,
     build_supervised_coder_result_receipt_preview,
     build_supervised_planner_result_receipt_preview,
     build_supervised_reviewer_result_receipt_preview,
@@ -207,6 +208,7 @@ class WorkflowEngine:
         required_actor = {
             ("CLASSIFIED", "SPEC_READY"): "PLANNER",
             ("SPEC_READY", "PLAN_READY"): "PLANNER",
+            ("PLAN_READY", "IMPLEMENTING"): "CODER",
         }.get((current["current_state"], actual_target)) or {
             "FIX_REQUIRED": "REVIEWER",
             "INTEGRATING": "REVIEWER",
@@ -378,6 +380,8 @@ class WorkflowEngine:
                 ("SPEC_READY", "PLAN_READY"),
             }:
                 return self._validate_planner_transition_evidence(target, paths, current)
+            if (current["current_state"], target) == ("PLAN_READY", "IMPLEMENTING"):
+                return self._validate_coder_handoff_evidence(paths, current)
             if (
                 current["current_state"] == "TASK_REVIEW"
                 and target in {"FIX_REQUIRED", "INTEGRATING"}
@@ -443,6 +447,80 @@ class WorkflowEngine:
         if agent_result["recommended_next_state"] != target:
             raise WorkflowEngineError(f"PLANNER result must recommend {target}")
         return [packet_snapshot, result_snapshot]
+
+    def _validate_coder_handoff_evidence(
+        self,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> list[tuple[str, int, str]]:
+        if len(paths) != 1:
+            raise WorkflowEngineError(
+                "IMPLEMENTING requires the canonical CODER packet as exactly one evidence file"
+            )
+        packet, packet_snapshot = self._read_canonical_evidence_json(paths[0])
+        try:
+            build_supervised_coder_handoff_preview(packet)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            packet["project_id"] != current["project_id"]
+            or packet["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "CODER packet project_id and task_id must match the current task"
+            )
+
+        events = self._trusted_audit_lineage(current)
+        latest_transition = next(
+            (
+                event
+                for event in reversed(events)
+                if event["event_type"] == "TRANSITION_ACCEPTED"
+            ),
+            None,
+        )
+        if (
+            latest_transition is None
+            or latest_transition["from_state"] != "SPEC_READY"
+            or latest_transition["to_state"] != "PLAN_READY"
+        ):
+            raise WorkflowEngineError(
+                "IMPLEMENTING requires the current frozen SPEC_READY to PLAN_READY boundary"
+            )
+        planner_bindings = latest_transition["evidence_bindings"]
+        if len(planner_bindings) != 2:
+            raise WorkflowEngineError(
+                "IMPLEMENTING requires the frozen PLAN_READY PLANNER packet and result"
+            )
+        planner_packet_path = self._bound_evidence_path(planner_bindings[0])
+        planner_result_path = self._bound_evidence_path(planner_bindings[1])
+        planner_packet, _ = self._read_canonical_evidence_json(planner_packet_path)
+        planner_result, _ = self._read_canonical_evidence_json(planner_result_path)
+        try:
+            build_supervised_planner_result_receipt_preview(
+                planner_packet,
+                planner_result,
+            )
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            planner_packet["project_id"] != current["project_id"]
+            or planner_packet["task_id"] != current["task_id"]
+            or planner_result["status"] not in {"DONE", "DONE_WITH_CONCERNS"}
+            or planner_result["recommended_next_state"] != "PLAN_READY"
+        ):
+            raise WorkflowEngineError(
+                "IMPLEMENTING requires the accepted frozen PLAN_READY PLANNER boundary"
+            )
+
+        expected_packet = dict(planner_packet)
+        expected_packet["packet_id"] = f"{current['task_id']}-coder-v1"
+        expected_packet["role"] = "CODER"
+        if packet != expected_packet:
+            raise WorkflowEngineError(
+                "CODER packet must preserve the frozen PLAN_READY task boundary"
+            )
+        return [packet_snapshot]
 
     def _validate_task_review_evidence(
         self,

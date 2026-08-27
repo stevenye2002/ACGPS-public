@@ -986,7 +986,7 @@ class MVPCLITests(unittest.TestCase):
             ("CLASSIFIED", "CONTROLLER", [source]),
             ("SPEC_READY", "PLANNER", [packet_path, planner_result_paths["SPEC_READY"]]),
             ("PLAN_READY", "PLANNER", [packet_path, planner_result_paths["PLAN_READY"]]),
-            ("IMPLEMENTING", "CODER", [source]),
+            ("IMPLEMENTING", "CODER", [coder_packet_path]),
             ("TASK_REVIEW", "CODER", [coder_packet_path, coder_result_path]),
             (
                 "INTEGRATING",

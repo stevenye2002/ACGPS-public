@@ -88,6 +88,23 @@ The command writes the preview to stdout only. The preview is not authority,
 execution evidence, or permission to start a process; a human-supervised coder
 session still requires separate operator authorization.
 
+For the exact `PLAN_READY -> IMPLEMENTING` transition, the controller requires
+actor `CODER` and the canonical Coder packet as the only evidence file. The
+packet must preserve the accepted `PLAN_READY` Planner packet's complete task
+boundary; only its deterministic `packet_id` and `role` change to `CODER`:
+
+```powershell
+python -m acgps task advance <engine arguments> `
+  --task-id TASK_ID --to-state IMPLEMENTING --actor CODER `
+  --created-at-utc 2026-08-27T00:00:00Z `
+  --evidence path/to/coder-packet.json
+```
+
+The controller revalidates the trusted Planner audit binding and SHA-256-binds
+the Coder packet before entering `IMPLEMENTING`. This gate does not launch a
+model or authorize changes beyond the frozen task boundary. Other existing
+paths back to `IMPLEMENTING` after review or human intervention are unchanged.
+
 After the supervised coder returns an `AGENT_RESULT` record, an operator can
 validate its contract and packet binding without launching a process or changing
 workflow state:
