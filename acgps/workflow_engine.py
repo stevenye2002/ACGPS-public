@@ -12,8 +12,8 @@ from acgps.policy import PolicyEvaluationError, evaluate_policy, load_policy_bun
 from acgps.review_adapter import (
     ReviewEvidenceError,
     validate_fix_required_findings,
+    validate_release_candidate_manifest,
     validate_review_findings,
-    verify_release_candidate_manifest,
 )
 from acgps.supervised_handoff import (
     build_supervised_coder_handoff_preview,
@@ -216,6 +216,7 @@ class WorkflowEngine:
             "INTEGRATING": "REVIEWER",
             "TASK_REVIEW": "CODER",
             "VERIFIED": "VERIFIER",
+            "RC_READY": "VERIFIER",
         }.get(actual_target)
         if required_actor is not None and actor != required_actor:
             raise WorkflowEngineError(f"{actual_target} requires actor {required_actor}")
@@ -413,15 +414,19 @@ class WorkflowEngine:
             elif target == "VERIFIED":
                 return self._validate_verifier_transition_evidence(target, paths, current)
             elif target == "RC_READY":
-                if not any(
-                    verify_release_candidate_manifest(
-                        path,
-                        expected_project_id=current["project_id"],
-                        expected_task_id=current["task_id"],
+                if len(paths) != 1:
+                    raise WorkflowEngineError(
+                        "RC_READY requires exactly one release-candidate manifest"
                     )
-                    for path in paths
+                manifest, snapshot = self._read_evidence_json_snapshot(paths[0])
+                if not validate_release_candidate_manifest(
+                    manifest,
+                    paths[0],
+                    expected_project_id=current["project_id"],
+                    expected_task_id=current["task_id"],
                 ):
                     raise WorkflowEngineError("RC_READY requires a valid release-candidate manifest")
+                return [snapshot]
         except (ContractValidationError, ReviewEvidenceError) as exc:
             raise WorkflowEngineError(str(exc)) from exc
 

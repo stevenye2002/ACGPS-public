@@ -150,6 +150,24 @@ def verify_release_candidate_manifest(
 ) -> bool:
     path = Path(manifest_path)
     manifest = _read_mapping(path)
+    return validate_release_candidate_manifest(
+        manifest,
+        path,
+        expected_project_id=expected_project_id,
+        expected_task_id=expected_task_id,
+        require_build_artifacts=require_build_artifacts,
+    )
+
+
+def validate_release_candidate_manifest(
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    *,
+    expected_project_id: str | None = None,
+    expected_task_id: str | None = None,
+    require_build_artifacts: bool = False,
+) -> bool:
+    path = Path(manifest_path)
     _validate_record("release_candidate_manifest", manifest, path)
     if manifest["status"] != "RC_READY":
         raise ReviewEvidenceError("release candidate manifest status must be RC_READY")

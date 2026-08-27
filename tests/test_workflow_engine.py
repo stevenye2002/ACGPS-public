@@ -1286,10 +1286,29 @@ class WorkflowEngineTests(unittest.TestCase):
                 rollback_path=rollback_path,
                 created_at_utc="2026-08-23T01:03:00Z",
             )
+            with self.assertRaisesRegex(WorkflowEngineError, "RC_READY requires actor VERIFIER"):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="CONTROLLER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:04:00Z",
+                )
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "RC_READY requires exactly one release-candidate manifest",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path, source_path],
+                    created_at_utc="2026-08-23T01:04:00Z",
+                )
             state = engine.advance(
                 "ftic-governance-1",
                 "RC_READY",
-                actor="CONTROLLER",
+                actor="VERIFIER",
                 evidence_paths=[manifest_path],
                 created_at_utc="2026-08-23T01:04:00Z",
             )
@@ -1297,6 +1316,70 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(state["current_state"], "RC_READY")
             self.assertEqual(len(engine.audit("ftic-governance-1")), 10)
             self.assertEqual(tree_bytes(MVP_FTIC_ROOT), managed_before)
+
+    def test_rc_ready_rejects_manifest_changed_after_validation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            review_path = advance_to_integrating(engine, hour=1)
+            verification_path = state_root / "verification.json"
+            verification_path.write_bytes(
+                canonical_json_bytes(valid_verification_record()) + b"\n"
+            )
+            engine.advance(
+                "ftic-governance-1",
+                "VERIFIED",
+                actor="VERIFIER",
+                evidence_paths=write_verifier_transition_evidence(engine, [verification_path]),
+                created_at_utc="2026-08-23T01:08:00Z",
+            )
+            source_path = state_root / "source.txt"
+            source_path.write_text("frozen governance source\n", encoding="utf-8")
+            rollback_path = state_root / "rollback.md"
+            rollback_path.write_text("Remove generated runtime state.\n", encoding="utf-8")
+            manifest_path = build_release_candidate_manifest(
+                output_dir=state_root,
+                project_id="FTIC",
+                rc_id="ftic-governance-rc-1",
+                version="1.0",
+                source_path=source_path,
+                verification_paths=[verification_path],
+                review_paths=[review_path],
+                rollback_path=rollback_path,
+                created_at_utc="2026-08-23T01:09:00Z",
+            )
+            replacement = json.loads(manifest_path.read_text(encoding="utf-8"))
+            replacement["version"] = "1.0-replaced"
+            replacement_payload = canonical_json_bytes(replacement) + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_before_binding(path, *args):
+                if Path(path) == manifest_path:
+                    manifest_path.write_bytes(replacement_payload)
+                return original_binding(path, *args)
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_before_binding,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "RC_READY evidence changed after validation",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
     def test_verified_requires_bound_verifier_result_and_hashes_all_evidence(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError

@@ -1095,7 +1095,7 @@ class MVPCLITests(unittest.TestCase):
             "--to-state",
             "RC_READY",
             "--actor",
-            "CONTROLLER",
+            "VERIFIER",
             "--created-at-utc",
             "2026-08-23T00:10:00Z",
             "--evidence",
