@@ -1466,6 +1466,187 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_verifier_fix_required_binds_failed_verification_for_coder_reentry(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_integrating(engine, hour=5)
+            verification_path = state_root / "failed-verification.json"
+            failed_verification = dict(
+                valid_verification_record(),
+                checks=[
+                    {
+                        "name": "focused",
+                        "command": "python -m unittest tests.test_workflow_engine",
+                        "exit_code": 1,
+                        "result_summary": "failed",
+                        "output_path": "evidence/focused.txt",
+                    }
+                ],
+                failed_requirements=["bounded governance flow"],
+                recommendation="FIX_REQUIRED",
+                verified_at_utc="2026-08-23T05:08:00Z",
+            )
+            verification_path.write_bytes(
+                canonical_json_bytes(failed_verification) + b"\n"
+            )
+            verifier_result = dict(
+                valid_verifier_result(),
+                status="DONE_WITH_CONCERNS",
+                recommended_next_state="FIX_REQUIRED",
+            )
+
+            fix_required = engine.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="VERIFIER",
+                evidence_paths=write_verifier_transition_evidence(
+                    engine,
+                    [verification_path],
+                    result=verifier_result,
+                ),
+                created_at_utc="2026-08-23T05:09:00Z",
+            )
+            self.assertEqual(fix_required["current_state"], "FIX_REQUIRED")
+
+            implementing = engine.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    engine,
+                    [verification_path],
+                ),
+                created_at_utc="2026-08-23T05:10:00Z",
+            )
+            self.assertEqual(implementing["current_state"], "IMPLEMENTING")
+
+            engine.advance(
+                "ftic-governance-1",
+                "TASK_REVIEW",
+                actor="CODER",
+                evidence_paths=write_task_review_evidence(engine),
+                created_at_utc="2026-08-23T05:11:00Z",
+            )
+            closed_finding = state_root / "closed-after-remediation.json"
+            write_review_finding(
+                closed_finding,
+                "finding-after-remediation",
+                status="CLOSED",
+            )
+            engine.advance(
+                "ftic-governance-1",
+                "INTEGRATING",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    engine,
+                    [closed_finding],
+                    target="INTEGRATING",
+                ),
+                created_at_utc="2026-08-23T05:12:00Z",
+            )
+            successful_verification_path = state_root / "successful-verification.json"
+            successful_verification_path.write_bytes(
+                canonical_json_bytes(
+                    dict(
+                        valid_verification_record(),
+                        verification_id="verification-after-remediation",
+                        verified_at_utc="2026-08-23T05:13:00Z",
+                    )
+                )
+                + b"\n"
+            )
+            verified = engine.advance(
+                "ftic-governance-1",
+                "VERIFIED",
+                actor="VERIFIER",
+                evidence_paths=write_verifier_transition_evidence(
+                    engine,
+                    [successful_verification_path],
+                ),
+                created_at_utc="2026-08-23T05:14:00Z",
+            )
+            self.assertEqual(verified["current_state"], "VERIFIED")
+
+    def test_verifier_fix_required_rejects_nonfailing_evidence_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        cases = (
+            (
+                "wrong result recommendation",
+                dict(valid_verifier_result(), recommended_next_state="VERIFIED"),
+                dict(
+                    valid_verification_record(),
+                    failed_requirements=["bounded governance flow"],
+                    recommendation="FIX_REQUIRED",
+                ),
+                "VERIFIER result must recommend FIX_REQUIRED",
+            ),
+            (
+                "successful verification record",
+                dict(
+                    valid_verifier_result(),
+                    status="DONE_WITH_CONCERNS",
+                    recommended_next_state="FIX_REQUIRED",
+                ),
+                valid_verification_record(),
+                "every verification record to recommend FIX_REQUIRED",
+            ),
+            (
+                "missing failed requirements",
+                dict(
+                    valid_verifier_result(),
+                    status="DONE_WITH_CONCERNS",
+                    recommended_next_state="FIX_REQUIRED",
+                ),
+                dict(valid_verification_record(), recommendation="FIX_REQUIRED"),
+                "requires failed requirements",
+            ),
+            (
+                "foreign verification record",
+                dict(
+                    valid_verifier_result(),
+                    status="DONE_WITH_CONCERNS",
+                    recommended_next_state="FIX_REQUIRED",
+                ),
+                dict(
+                    valid_verification_record(),
+                    project_id="OTHER",
+                    failed_requirements=["bounded governance flow"],
+                    recommendation="FIX_REQUIRED",
+                ),
+                "project_id and task_id must match",
+            ),
+        )
+        for label, result, verification, expected_error in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                advance_to_integrating(engine, hour=6)
+                verification_path = state_root / "verification.json"
+                verification_path.write_bytes(
+                    canonical_json_bytes(verification) + b"\n"
+                )
+                evidence_paths = write_verifier_transition_evidence(
+                    engine,
+                    [verification_path],
+                    result=result,
+                )
+                before = tree_bytes(state_root)
+
+                with self.assertRaisesRegex(WorkflowEngineError, expected_error):
+                    engine.advance(
+                        "ftic-governance-1",
+                        "FIX_REQUIRED",
+                        actor="VERIFIER",
+                        evidence_paths=evidence_paths,
+                        created_at_utc="2026-08-23T06:09:00Z",
+                    )
+
+                self.assertEqual(tree_bytes(state_root), before)
+
     def test_fix_required_requires_reviewer_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

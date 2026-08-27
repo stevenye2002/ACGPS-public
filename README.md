@@ -206,6 +206,15 @@ and recommends `VERIFIED`. Existing verification-record identity and freshness
 rules still apply, and every supplied evidence file is SHA-256-bound into the
 transition audit. Record-only `VERIFIED` requests are rejected.
 
+When verification instead identifies required corrections, an operator may
+request `INTEGRATING -> FIX_REQUIRED` with actor `VERIFIER`. The same canonical
+Verifier packet and result must be followed by verification records that all
+recommend `FIX_REQUIRED`, identify the current project and task, and contain
+failed requirements. The controller binds those records into the audit, and a
+later Coder remediation handoff must provide the original plan-bound Coder
+packet followed by those exact failed-verification records. This does not alter
+the independent Reviewer evidence required for transitions from `TASK_REVIEW`.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs

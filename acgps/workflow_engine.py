@@ -210,6 +210,7 @@ class WorkflowEngine:
             ("SPEC_READY", "PLAN_READY"): "PLANNER",
             ("PLAN_READY", "IMPLEMENTING"): "CODER",
             ("FIX_REQUIRED", "IMPLEMENTING"): "CODER",
+            ("INTEGRATING", "FIX_REQUIRED"): "VERIFIER",
         }.get((current["current_state"], actual_target)) or {
             "FIX_REQUIRED": "REVIEWER",
             "INTEGRATING": "REVIEWER",
@@ -385,6 +386,8 @@ class WorkflowEngine:
                 return self._validate_coder_handoff_evidence(paths, current)
             if (current["current_state"], target) == ("FIX_REQUIRED", "IMPLEMENTING"):
                 return self._validate_coder_remediation_handoff_evidence(paths, current)
+            if (current["current_state"], target) == ("INTEGRATING", "FIX_REQUIRED"):
+                return self._validate_verifier_transition_evidence(target, paths, current)
             if (
                 current["current_state"] == "TASK_REVIEW"
                 and target in {"FIX_REQUIRED", "INTEGRATING"}
@@ -408,7 +411,7 @@ class WorkflowEngine:
             elif target == "TASK_REVIEW":
                 return self._validate_task_review_evidence(paths, current)
             elif target == "VERIFIED":
-                return self._validate_verifier_transition_evidence(paths, current)
+                return self._validate_verifier_transition_evidence(target, paths, current)
             elif target == "RC_READY":
                 if not any(
                     verify_release_candidate_manifest(
@@ -582,10 +585,21 @@ class WorkflowEngine:
         submitted_snapshots: list[tuple[str, int, str]] = []
         for path in paths[1:]:
             record, snapshot = self._read_evidence_json_snapshot(path)
-            validate_contract("review_finding", record, mode="runtime")
-            if not self._is_current_fix_blocker(record):
+            if "finding_id" in record:
+                validate_contract("review_finding", record, mode="runtime")
+                valid_blocker = self._is_current_fix_blocker(record)
+            elif "verification_id" in record:
+                validate_contract("verification_record", record, mode="runtime")
+                valid_blocker = (
+                    record["project_id"] == current["project_id"]
+                    and record["task_id"] == current["task_id"]
+                    and self._is_current_verification_failure(record)
+                )
+            else:
+                valid_blocker = False
+            if not valid_blocker:
                 raise WorkflowEngineError(
-                    "FIX_REQUIRED to IMPLEMENTING requires current blocking review findings"
+                    "FIX_REQUIRED to IMPLEMENTING requires current blocking remediation evidence"
                 )
             submitted_snapshots.append(snapshot)
         expected_snapshots = [snapshot for _, snapshot in expected_blockers]
@@ -679,16 +693,65 @@ class WorkflowEngine:
 
     def _validate_verifier_transition_evidence(
         self,
+        target: str,
         paths: list[Path],
         current: dict[str, Any],
     ) -> list[tuple[str, int, str]]:
         if len(paths) < 3:
             raise WorkflowEngineError(
-                "VERIFIED requires the canonical VERIFIER packet and result "
+                f"{target} requires the canonical VERIFIER packet and result "
                 "followed by verification records"
             )
         packet, packet_snapshot = self._read_canonical_evidence_json(paths[0])
         agent_result, result_snapshot = self._read_canonical_evidence_json(paths[1])
+        self._validate_verifier_result_binding(packet, agent_result, target, current)
+
+        accepted_recommendation = False
+        boundary = (
+            self._fix_cycle_integration_boundary(current)
+            if target == "VERIFIED"
+            else None
+        )
+        verification_snapshots: list[tuple[str, int, str]] = []
+        for path in paths[2:]:
+            record, snapshot = self._read_evidence_json_snapshot(path)
+            if target == "FIX_REQUIRED":
+                self._validate_fix_required_verification_record(record, current)
+                accepted_recommendation = True
+            else:
+                validate_contract("verification_record", record, mode="runtime")
+                if (
+                    record["project_id"] != current["project_id"]
+                    or record["task_id"] != current["task_id"]
+                ):
+                    raise WorkflowEngineError(
+                        "verification evidence project_id and task_id must match the current task"
+                    )
+                if record["recommendation"] == "VERIFIED":
+                    if (
+                        boundary is not None
+                        and self._utc_instant(record["verified_at_utc"]) < boundary
+                    ):
+                        raise WorkflowEngineError(
+                            "verification evidence predates the current fix-cycle integration boundary"
+                        )
+                    accepted_recommendation = True
+            verification_snapshots.append(snapshot)
+        if not accepted_recommendation:
+            if target == "VERIFIED":
+                raise WorkflowEngineError("VERIFIED requires a successful verification record")
+            raise WorkflowEngineError(
+                "FIX_REQUIRED requires a failed verification record"
+            )
+        return [packet_snapshot, result_snapshot, *verification_snapshots]
+
+    @staticmethod
+    def _validate_verifier_result_binding(
+        packet: dict[str, Any],
+        agent_result: dict[str, Any],
+        target: str,
+        current: dict[str, Any],
+    ) -> None:
         try:
             build_supervised_verifier_result_receipt_preview(packet, agent_result)
         except (ContractValidationError, ValueError) as exc:
@@ -701,36 +764,32 @@ class WorkflowEngine:
                 "VERIFIER packet project_id and task_id must match the current task"
             )
         if agent_result["status"] not in {"DONE", "DONE_WITH_CONCERNS"}:
-            raise WorkflowEngineError("VERIFIED requires a completed VERIFIER result")
-        if agent_result["recommended_next_state"] != "VERIFIED":
-            raise WorkflowEngineError("VERIFIER result must recommend VERIFIED")
+            raise WorkflowEngineError(f"{target} requires a completed VERIFIER result")
+        if agent_result["recommended_next_state"] != target:
+            raise WorkflowEngineError(f"VERIFIER result must recommend {target}")
 
-        verified = False
-        boundary = self._fix_cycle_integration_boundary(current)
-        verification_snapshots: list[tuple[str, int, str]] = []
-        for path in paths[2:]:
-            record, snapshot = self._read_evidence_json_snapshot(path)
-            validate_contract("verification_record", record, mode="runtime")
-            if (
-                record["project_id"] != current["project_id"]
-                or record["task_id"] != current["task_id"]
-            ):
-                raise WorkflowEngineError(
-                    "verification evidence project_id and task_id must match the current task"
-                )
-            if record["recommendation"] == "VERIFIED":
-                if (
-                    boundary is not None
-                    and self._utc_instant(record["verified_at_utc"]) < boundary
-                ):
-                    raise WorkflowEngineError(
-                        "verification evidence predates the current fix-cycle integration boundary"
-                    )
-                verified = True
-            verification_snapshots.append(snapshot)
-        if not verified:
-            raise WorkflowEngineError("VERIFIED requires a successful verification record")
-        return [packet_snapshot, result_snapshot, *verification_snapshots]
+    @classmethod
+    def _validate_fix_required_verification_record(
+        cls,
+        record: dict[str, Any],
+        current: dict[str, Any],
+    ) -> None:
+        validate_contract("verification_record", record, mode="runtime")
+        if (
+            record["project_id"] != current["project_id"]
+            or record["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "verification evidence project_id and task_id must match the current task"
+            )
+        if record["recommendation"] != "FIX_REQUIRED":
+            raise WorkflowEngineError(
+                "FIX_REQUIRED requires every verification record to recommend FIX_REQUIRED"
+            )
+        if not cls._is_current_verification_failure(record):
+            raise WorkflowEngineError(
+                "FIX_REQUIRED verification evidence requires failed requirements"
+            )
 
     @staticmethod
     def _is_current_fix_blocker(record: dict[str, Any]) -> bool:
@@ -738,6 +797,13 @@ class WorkflowEngine:
             record["severity"] in {"P0", "P1"}
             and record["status"] in {"OPEN", "IN_PROGRESS"}
             and record["disposition"] in {"ACCEPTED", "PARTIAL"}
+        )
+
+    @staticmethod
+    def _is_current_verification_failure(record: dict[str, Any]) -> bool:
+        return (
+            record["recommendation"] == "FIX_REQUIRED"
+            and bool(record["failed_requirements"])
         )
 
     def _current_fix_cycle_blockers(
@@ -750,6 +816,54 @@ class WorkflowEngine:
                 continue
             evidence_bindings = event["evidence_bindings"]
             finding_bindings = evidence_bindings
+            if event["from_state"] == "INTEGRATING" and evidence_bindings:
+                first_record, _ = self._read_bound_evidence_json_snapshot(
+                    evidence_bindings[0]
+                )
+                if first_record.get("role") == "VERIFIER":
+                    if len(evidence_bindings) < 3:
+                        raise WorkflowEngineError(
+                            "stored FIX_REQUIRED verifier evidence is incomplete"
+                        )
+                    packet, _ = self._read_bound_canonical_evidence_json(
+                        evidence_bindings[0]
+                    )
+                    agent_result, _ = self._read_bound_canonical_evidence_json(
+                        evidence_bindings[1]
+                    )
+                    try:
+                        self._validate_verifier_result_binding(
+                            packet,
+                            agent_result,
+                            "FIX_REQUIRED",
+                            current,
+                        )
+                    except WorkflowEngineError as exc:
+                        raise WorkflowEngineError(
+                            f"stored FIX_REQUIRED verifier evidence is invalid: {exc}"
+                        ) from exc
+                    verification_bindings = evidence_bindings[2:]
+                    event_has_blocker = False
+                    for binding in verification_bindings:
+                        record, snapshot = self._read_bound_evidence_json_snapshot(
+                            binding
+                        )
+                        try:
+                            self._validate_fix_required_verification_record(
+                                record,
+                                current,
+                            )
+                        except (ContractValidationError, WorkflowEngineError) as exc:
+                            raise WorkflowEngineError(
+                                f"stored FIX_REQUIRED verifier evidence is invalid: {exc}"
+                            ) from exc
+                        event_has_blocker = True
+                        blocker_records.append((record, snapshot))
+                    if not event_has_blocker:
+                        raise WorkflowEngineError(
+                            "stored FIX_REQUIRED verifier evidence has no failed requirement"
+                        )
+                    continue
             if event["from_state"] == "TASK_REVIEW" and evidence_bindings:
                 first_record, _ = self._read_bound_evidence_json_snapshot(
                     evidence_bindings[0]
@@ -799,6 +913,7 @@ class WorkflowEngine:
         return {
             record["finding_id"]
             for record, _ in self._current_fix_cycle_blockers(current)
+            if "finding_id" in record
         }
 
     def _fix_cycle_integration_boundary(self, current: dict[str, Any]) -> datetime | None:
