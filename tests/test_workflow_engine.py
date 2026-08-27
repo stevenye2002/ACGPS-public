@@ -44,6 +44,47 @@ def write_task_review_evidence(engine) -> list[Path]:
     return [packet_path, result_path]
 
 
+def valid_planner_packet() -> dict[str, object]:
+    return generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+
+
+def valid_planner_result(*, recommended_next_state: str) -> dict[str, object]:
+    return dict(
+        valid_agent_result(),
+        packet_id="ftic-governance-1-planner-v1",
+        role="PLANNER",
+        summary="Completed the bounded planning task.",
+        changed_files=[],
+        created_files=[],
+        recommended_next_state=recommended_next_state,
+    )
+
+
+def write_planner_transition_evidence(
+    engine,
+    *,
+    target: str,
+    packet: dict[str, object] | None = None,
+    result: dict[str, object] | None = None,
+) -> list[Path]:
+    evidence_dir = (
+        engine.state_root
+        / "planner-transition-evidence"
+        / f"{target.casefold()}-{len(engine.audit('ftic-governance-1')) + 1:04d}"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    packet_path = evidence_dir / "planner-packet.json"
+    result_path = evidence_dir / "planner-result.json"
+    packet_path.write_bytes(canonical_json_bytes(packet or valid_planner_packet()) + b"\n")
+    result_path.write_bytes(
+        canonical_json_bytes(
+            result or valid_planner_result(recommended_next_state=target)
+        )
+        + b"\n"
+    )
+    return [packet_path, result_path]
+
+
 def valid_reviewer_packet() -> dict[str, object]:
     return generate_task_packet("REVIEWER", valid_intake(), valid_policy_result())
 
@@ -128,11 +169,16 @@ def advance_to_implementing(engine, *, hour: int) -> Path:
         ),
         start=1,
     ):
+        planner_gate = target in {"SPEC_READY", "PLAN_READY"}
         engine.advance(
             "ftic-governance-1",
             target,
-            actor="CONTROLLER",
-            evidence_paths=[evidence],
+            actor="PLANNER" if planner_gate else "CONTROLLER",
+            evidence_paths=(
+                write_planner_transition_evidence(engine, target=target)
+                if planner_gate
+                else [evidence]
+            ),
             created_at_utc=f"2026-08-23T{hour:02d}:{minute:02d}:00Z",
         )
     return evidence
@@ -250,6 +296,259 @@ def start_recovery_generation(engine, state: dict[str, object], *, created_at_ut
 
 
 class WorkflowEngineTests(unittest.TestCase):
+    def test_planning_gates_require_planner_actor_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        cases = (
+            ("SPEC_READY", False),
+            ("PLAN_READY", True),
+        )
+        for target, enter_spec_ready in cases:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                engine.intake(valid_intake())
+                evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+                for minute, initial_target in enumerate(
+                    ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                    start=1,
+                ):
+                    engine.advance(
+                        "ftic-governance-1",
+                        initial_target,
+                        actor="CONTROLLER",
+                        evidence_paths=[evidence],
+                        created_at_utc=f"2026-08-27T01:0{minute}:00Z",
+                    )
+                if enter_spec_ready:
+                    engine.advance(
+                        "ftic-governance-1",
+                        "SPEC_READY",
+                        actor="PLANNER",
+                        evidence_paths=write_planner_transition_evidence(
+                            engine,
+                            target="SPEC_READY",
+                        ),
+                        created_at_utc="2026-08-27T01:03:00Z",
+                    )
+                before_state = engine.status("ftic-governance-1")
+                before_audit = engine.audit("ftic-governance-1")
+
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    f"{target} requires actor PLANNER",
+                ):
+                    engine.advance(
+                        "ftic-governance-1",
+                        target,
+                        actor="CONTROLLER",
+                        evidence_paths=[evidence],
+                        created_at_utc="2026-08-27T01:04:00Z",
+                    )
+
+                self.assertEqual(engine.status("ftic-governance-1"), before_state)
+                self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_planning_gates_accept_bound_planner_results(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            engine.intake(valid_intake())
+            generic_evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[generic_evidence],
+                    created_at_utc=f"2026-08-27T02:0{minute}:00Z",
+                )
+
+            for minute, target in enumerate(("SPEC_READY", "PLAN_READY"), start=3):
+                evidence_paths = write_planner_transition_evidence(engine, target=target)
+                state = engine.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="PLANNER",
+                    evidence_paths=evidence_paths,
+                    created_at_utc=f"2026-08-27T02:0{minute}:00Z",
+                )
+
+                self.assertEqual(state["current_state"], target)
+                self.assertEqual(
+                    [
+                        binding["content_sha256"]
+                        for binding in engine.audit("ftic-governance-1")[-1][
+                            "evidence_bindings"
+                        ]
+                    ],
+                    [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence_paths],
+                )
+
+    def test_planning_gates_reject_unbound_or_invalid_planner_results_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        packet = valid_planner_packet()
+        for target in ("SPEC_READY", "PLAN_READY"):
+            result = valid_planner_result(recommended_next_state=target)
+            cases = (
+                (
+                    "generic evidence",
+                    packet,
+                    result,
+                    "canonical PLANNER packet and result",
+                    True,
+                ),
+                (
+                    "wrong task",
+                    dict(packet, task_id="other-task"),
+                    result,
+                    "project_id and task_id must match",
+                    False,
+                ),
+                (
+                    "mismatched packet",
+                    packet,
+                    dict(result, packet_id="other-planner-v1"),
+                    "packet_id does not match",
+                    False,
+                ),
+                (
+                    "unfinished result",
+                    packet,
+                    dict(result, status="NEEDS_CONTEXT"),
+                    "completed PLANNER result",
+                    False,
+                ),
+                (
+                    "wrong next state",
+                    packet,
+                    dict(result, recommended_next_state="WAITING_HUMAN"),
+                    f"recommend {target}",
+                    False,
+                ),
+            )
+            for name, candidate_packet, candidate_result, message, generic_only in cases:
+                with (
+                    self.subTest(target=target, case=name),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    state_root = Path(tmp) / "state"
+                    engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                    engine.intake(valid_intake())
+                    generic_evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+                    for minute, initial_target in enumerate(
+                        ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                        start=1,
+                    ):
+                        engine.advance(
+                            "ftic-governance-1",
+                            initial_target,
+                            actor="CONTROLLER",
+                            evidence_paths=[generic_evidence],
+                            created_at_utc=f"2026-08-27T03:0{minute}:00Z",
+                        )
+                    if target == "PLAN_READY":
+                        engine.advance(
+                            "ftic-governance-1",
+                            "SPEC_READY",
+                            actor="PLANNER",
+                            evidence_paths=write_planner_transition_evidence(
+                                engine,
+                                target="SPEC_READY",
+                            ),
+                            created_at_utc="2026-08-27T03:03:00Z",
+                        )
+                    evidence_paths = (
+                        [generic_evidence]
+                        if generic_only
+                        else write_planner_transition_evidence(
+                            engine,
+                            target=target,
+                            packet=candidate_packet,
+                            result=candidate_result,
+                        )
+                    )
+                    before_state = engine.status("ftic-governance-1")
+                    before_audit = engine.audit("ftic-governance-1")
+
+                    with self.assertRaisesRegex(WorkflowEngineError, message):
+                        engine.advance(
+                            "ftic-governance-1",
+                            target,
+                            actor="PLANNER",
+                            evidence_paths=evidence_paths,
+                            created_at_utc="2026-08-27T03:04:00Z",
+                        )
+
+                    self.assertEqual(engine.status("ftic-governance-1"), before_state)
+                    self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_planning_gate_rejects_result_replaced_after_validation_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            engine.intake(valid_intake())
+            generic_evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[generic_evidence],
+                    created_at_utc=f"2026-08-27T04:0{minute}:00Z",
+                )
+            packet_path, result_path = write_planner_transition_evidence(
+                engine,
+                target="SPEC_READY",
+            )
+            replacement = dict(
+                valid_planner_result(recommended_next_state="SPEC_READY"),
+                summary="Planner result was replaced after validation.",
+            )
+            replacement_payload = canonical_json_bytes(replacement) + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_before_binding(path, *args):
+                if Path(path) == result_path:
+                    result_path.write_bytes(replacement_payload)
+                return original_binding(path, *args)
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_before_binding,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "SPEC_READY evidence changed after validation",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "SPEC_READY",
+                    actor="PLANNER",
+                    evidence_paths=[packet_path, result_path],
+                    created_at_utc="2026-08-27T04:03:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_task_review_rejects_unbound_evidence_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
@@ -563,12 +862,21 @@ class WorkflowEngineTests(unittest.TestCase):
                 "IMPLEMENTING",
                 "TASK_REVIEW",
             ):
+                planner_gate = target in {"SPEC_READY", "PLAN_READY"}
                 state = engine.advance(
                     "ftic-governance-1",
                     target,
-                    actor="CODER" if target == "TASK_REVIEW" else "CONTROLLER",
+                    actor=(
+                        "CODER"
+                        if target == "TASK_REVIEW"
+                        else "PLANNER" if planner_gate else "CONTROLLER"
+                    ),
                     evidence_paths=(
-                        task_review_evidence if target == "TASK_REVIEW" else [generic_evidence]
+                        task_review_evidence
+                        if target == "TASK_REVIEW"
+                        else write_planner_transition_evidence(engine, target=target)
+                        if planner_gate
+                        else [generic_evidence]
                     ),
                     created_at_utc="2026-08-23T01:00:00Z",
                 )

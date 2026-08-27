@@ -56,6 +56,25 @@ Both commands write only to stdout. They do not launch a process, change
 workflow state, or authorize a transition to `SPEC_READY` or `PLAN_READY`;
 those remain separate controller operations.
 
+For those operator-authorized planning transitions, provide the same canonical
+Planner packet first and canonical result second. The controller admits
+`CLASSIFIED -> SPEC_READY` and `SPEC_READY -> PLAN_READY` only for actor
+`PLANNER`, a `DONE` or `DONE_WITH_CONCERNS` result bound to the current
+project/task packet, and a recommendation matching the requested target:
+
+```powershell
+python -m acgps task advance <engine arguments> `
+  --task-id TASK_ID --to-state SPEC_READY --actor PLANNER `
+  --created-at-utc 2026-08-27T00:00:00Z `
+  --evidence path/to/planner-packet.json `
+  --evidence path/to/planner-result.json
+```
+
+Use the same evidence order with `--to-state PLAN_READY` only after the task is
+in `SPEC_READY` and the Planner result recommends `PLAN_READY`. Both evidence
+files are SHA-256-bound into the append-only transition audit. These operations
+do not launch a model or assess the semantic quality of the Planner's output.
+
 ## Supervised coder handoff preview
 
 After generating a canonical `CODER` task packet, an operator can validate and

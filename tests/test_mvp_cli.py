@@ -869,6 +869,26 @@ class MVPCLITests(unittest.TestCase):
         )
         validate_contract("agent_task_contract", packet, mode="runtime")
         self.assertEqual(json.loads(packet_path.read_text(encoding="utf-8")), packet)
+        planner_result_paths = {}
+        for target in ("SPEC_READY", "PLAN_READY"):
+            result_path = (
+                self.state_root / "packets" / f"planner-{target.casefold()}-result.json"
+            )
+            result_path.write_bytes(
+                canonical_json_bytes(
+                    dict(
+                        valid_agent_result(),
+                        packet_id=packet["packet_id"],
+                        role="PLANNER",
+                        summary=f"Completed the bounded Planner work for {target}.",
+                        changed_files=[],
+                        created_files=[],
+                        recommended_next_state=target,
+                    )
+                )
+                + b"\n"
+            )
+            planner_result_paths[target] = result_path
 
         coder_packet_path = self.state_root / "packets" / "coder.json"
         coder_packet = self._run(
@@ -964,8 +984,8 @@ class MVPCLITests(unittest.TestCase):
         transitions = [
             ("READY_FOR_CLASSIFICATION", "PLANNER", [source]),
             ("CLASSIFIED", "CONTROLLER", [source]),
-            ("SPEC_READY", "PLANNER", [source]),
-            ("PLAN_READY", "PLANNER", [source]),
+            ("SPEC_READY", "PLANNER", [packet_path, planner_result_paths["SPEC_READY"]]),
+            ("PLAN_READY", "PLANNER", [packet_path, planner_result_paths["PLAN_READY"]]),
             ("IMPLEMENTING", "CODER", [source]),
             ("TASK_REVIEW", "CODER", [coder_packet_path, coder_result_path]),
             (
