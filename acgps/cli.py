@@ -13,6 +13,8 @@ from acgps.review_adapter import build_release_candidate_manifest, verify_releas
 from acgps.supervised_handoff import (
     build_supervised_coder_handoff_preview,
     build_supervised_coder_result_receipt_preview,
+    build_supervised_planner_handoff_preview,
+    build_supervised_planner_result_receipt_preview,
     build_supervised_reviewer_handoff_preview,
     build_supervised_reviewer_result_receipt_preview,
     build_supervised_verifier_handoff_preview,
@@ -156,6 +158,14 @@ def _build_parser() -> argparse.ArgumentParser:
     rc_prepare.add_argument("--review", action="append", required=True)
     rc_prepare.add_argument("--rollback", required=True)
     rc_prepare.add_argument("--created-at-utc", required=True)
+
+    plan = commands.add_parser("plan")
+    plan_commands = plan.add_subparsers(dest="command", required=True)
+    plan_handoff_preview = plan_commands.add_parser("handoff-preview")
+    plan_handoff_preview.add_argument("--packet", required=True)
+    plan_result_receipt_preview = plan_commands.add_parser("result-receipt-preview")
+    plan_result_receipt_preview.add_argument("--packet", required=True)
+    plan_result_receipt_preview.add_argument("--result", required=True)
 
     coding = commands.add_parser("coding")
     coding_commands = coding.add_subparsers(dest="command", required=True)
@@ -316,6 +326,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             "gate_id": record["gate_id"],
             "outcome": record["outcome"],
         }
+
+    if args.group == "plan" and args.command == "handoff-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        return build_supervised_planner_handoff_preview(packet)
+
+    if args.group == "plan" and args.command == "result-receipt-preview":
+        packet = _read_canonical_json_mapping(Path(args.packet))
+        agent_result = _read_canonical_json_mapping(Path(args.result))
+        return build_supervised_planner_result_receipt_preview(packet, agent_result)
 
     if args.group == "coding" and args.command == "handoff-preview":
         packet = _read_canonical_json_mapping(Path(args.packet))

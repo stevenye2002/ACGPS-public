@@ -94,6 +94,12 @@ def build_supervised_coder_handoff_preview(packet: dict[str, Any]) -> dict[str, 
     return _build_supervised_handoff_preview(packet, role="CODER")
 
 
+def build_supervised_planner_handoff_preview(packet: dict[str, Any]) -> dict[str, Any]:
+    """Return a validated, non-authoritative preview for a human-supervised planner."""
+
+    return _build_supervised_handoff_preview(packet, role="PLANNER")
+
+
 def build_supervised_reviewer_handoff_preview(packet: dict[str, Any]) -> dict[str, Any]:
     """Return a validated, non-authoritative preview for a human-supervised reviewer."""
 
@@ -152,6 +158,19 @@ def build_supervised_coder_result_receipt_preview(
     """Return a validated, non-authoritative result receipt preview."""
 
     return _build_supervised_result_receipt_preview(packet, agent_result, role="CODER")
+
+
+def build_supervised_planner_result_receipt_preview(
+    packet: dict[str, Any],
+    agent_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a validated, non-authoritative planner result receipt preview."""
+
+    return _build_supervised_result_receipt_preview(
+        packet,
+        agent_result,
+        role="PLANNER",
+    )
 
 
 def build_supervised_reviewer_result_receipt_preview(

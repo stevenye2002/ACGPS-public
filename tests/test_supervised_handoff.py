@@ -13,6 +13,107 @@ from acgps.workflow_contracts import canonical_json_bytes
 from tests.test_mvp_cli import valid_agent_result, valid_intake, valid_policy_result
 
 
+class SupervisedPlannerHandoffTests(unittest.TestCase):
+    @staticmethod
+    def _handoff_builder():
+        builder = getattr(
+            supervised_handoff,
+            "build_supervised_planner_handoff_preview",
+            None,
+        )
+        if not callable(builder):
+            raise AssertionError("Planner handoff preview builder is unavailable")
+        return builder
+
+    @staticmethod
+    def _result_builder():
+        builder = getattr(
+            supervised_handoff,
+            "build_supervised_planner_result_receipt_preview",
+            None,
+        )
+        if not callable(builder):
+            raise AssertionError("Planner result receipt preview builder is unavailable")
+        return builder
+
+    @staticmethod
+    def _valid_result(packet: dict[str, object]) -> dict[str, object]:
+        return dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="PLANNER",
+            changed_files=[],
+            created_files=[],
+            recommended_next_state="SPEC_READY",
+        )
+
+    def test_builds_deterministic_validated_no_launch_preview(self) -> None:
+        packet = generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+
+        preview = self._handoff_builder()(packet)
+
+        self.assertEqual(preview["status"], "HANDOFF_PREVIEW")
+        self.assertEqual(preview["mode"], "HUMAN_SUPERVISED")
+        self.assertEqual(preview["packet"], packet)
+        self.assertEqual(
+            preview["packet_sha256"],
+            hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+        )
+        self.assertEqual(
+            preview["controls"],
+            {
+                "model_execution": "NOT_STARTED",
+                "operator_authorization_required": True,
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+            },
+        )
+
+    def test_builds_deterministic_validated_result_receipt_preview(self) -> None:
+        packet = generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+        agent_result = self._valid_result(packet)
+
+        preview = self._result_builder()(packet, agent_result)
+
+        self.assertEqual(preview["status"], "RESULT_RECEIPT_PREVIEW")
+        self.assertEqual(preview["mode"], "HUMAN_SUPERVISED")
+        self.assertEqual(preview["packet_id"], packet["packet_id"])
+        self.assertEqual(
+            preview["packet_sha256"],
+            hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+        )
+        self.assertEqual(preview["agent_result"], agent_result)
+        self.assertEqual(
+            preview["agent_result_sha256"],
+            hashlib.sha256(canonical_json_bytes(agent_result)).hexdigest(),
+        )
+        self.assertEqual(
+            preview["controls"],
+            {
+                "model_execution": "NOT_STARTED",
+                "operator_authorization_required": True,
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        )
+
+    def test_rejects_non_planner_packet_or_result(self) -> None:
+        planner_packet = generate_task_packet(
+            "PLANNER", valid_intake(), valid_policy_result()
+        )
+        coder_packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
+        cases = (
+            (coder_packet, dict(self._valid_result(coder_packet), role="PLANNER")),
+            (planner_packet, dict(self._valid_result(planner_packet), role="CODER")),
+        )
+
+        for packet, agent_result in cases:
+            with self.subTest(packet_role=packet["role"], result_role=agent_result["role"]):
+                with self.assertRaisesRegex(ValueError, "PLANNER"):
+                    self._result_builder()(packet, agent_result)
+
+
 class SupervisedCoderHandoffTests(unittest.TestCase):
     def test_builds_deterministic_validated_result_receipt_preview(self) -> None:
         packet = generate_task_packet("CODER", valid_intake(), valid_policy_result())
@@ -416,6 +517,7 @@ class WindowsPathSafetyTests(unittest.TestCase):
     @staticmethod
     def _result(packet: dict[str, object], role: str) -> dict[str, object]:
         recommended_next_state = {
+            "PLANNER": "SPEC_READY",
             "CODER": "TASK_REVIEW",
             "REVIEWER": "INTEGRATING",
             "VERIFIER": "VERIFIED",
@@ -431,6 +533,7 @@ class WindowsPathSafetyTests(unittest.TestCase):
 
     def test_rejects_windows_unsafe_packet_components_for_all_supervised_roles(self) -> None:
         builders = {
+            "PLANNER": supervised_handoff.build_supervised_planner_handoff_preview,
             "CODER": supervised_handoff.build_supervised_coder_handoff_preview,
             "REVIEWER": supervised_handoff.build_supervised_reviewer_handoff_preview,
             "VERIFIER": supervised_handoff.build_supervised_verifier_handoff_preview,
@@ -447,6 +550,7 @@ class WindowsPathSafetyTests(unittest.TestCase):
 
     def test_rejects_windows_unsafe_result_components_for_all_supervised_roles(self) -> None:
         builders = {
+            "PLANNER": supervised_handoff.build_supervised_planner_result_receipt_preview,
             "CODER": supervised_handoff.build_supervised_coder_result_receipt_preview,
             "REVIEWER": supervised_handoff.build_supervised_reviewer_result_receipt_preview,
             "VERIFIER": supervised_handoff.build_supervised_verifier_result_receipt_preview,

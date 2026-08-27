@@ -34,6 +34,28 @@ python scripts/check.py setup
 python scripts/check.py full
 ```
 
+## Supervised planner handoff preview
+
+After generating a canonical `PLANNER` task packet, an operator can validate
+and preview the handoff without launching a model or writing workflow state:
+
+```powershell
+python -m acgps plan handoff-preview --packet path/to/planner-packet.json
+```
+
+After the supervised planner returns an `AGENT_RESULT` record, the operator can
+validate its contract, role, packet identity, and safe relative file claims:
+
+```powershell
+python -m acgps plan result-receipt-preview `
+  --packet path/to/planner-packet.json `
+  --result path/to/planner-result.json
+```
+
+Both commands write only to stdout. They do not launch a process, change
+workflow state, or authorize a transition to `SPEC_READY` or `PLAN_READY`;
+those remain separate controller operations.
+
 ## Supervised coder handoff preview
 
 After generating a canonical `CODER` task packet, an operator can validate and
