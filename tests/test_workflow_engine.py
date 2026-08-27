@@ -83,6 +83,38 @@ def write_reviewer_transition_evidence(
     return [packet_path, result_path, *finding_paths]
 
 
+def valid_verifier_packet() -> dict[str, object]:
+    return generate_task_packet("VERIFIER", valid_intake(), valid_policy_result())
+
+
+def valid_verifier_result() -> dict[str, object]:
+    return dict(
+        valid_agent_result(),
+        packet_id="ftic-governance-1-verifier-v1",
+        role="VERIFIER",
+        summary="Completed the bounded independent verification.",
+        changed_files=[],
+        created_files=[],
+        recommended_next_state="VERIFIED",
+    )
+
+
+def write_verifier_transition_evidence(
+    engine,
+    verification_paths: list[Path],
+    *,
+    packet: dict[str, object] | None = None,
+    result: dict[str, object] | None = None,
+) -> list[Path]:
+    evidence_dir = engine.state_root / "verifier-transition-evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    packet_path = evidence_dir / "verifier-packet.json"
+    result_path = evidence_dir / "verifier-result.json"
+    packet_path.write_bytes(canonical_json_bytes(packet or valid_verifier_packet()) + b"\n")
+    result_path.write_bytes(canonical_json_bytes(result or valid_verifier_result()) + b"\n")
+    return [packet_path, result_path, *verification_paths]
+
+
 def advance_to_implementing(engine, *, hour: int) -> Path:
     engine.intake(valid_intake())
     evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
@@ -116,6 +148,26 @@ def advance_to_task_review(engine, *, hour: int) -> Path:
         created_at_utc=f"2026-08-23T{hour:02d}:06:00Z",
     )
     return evidence
+
+
+def advance_to_integrating(engine, *, hour: int) -> Path:
+    advance_to_task_review(engine, hour=hour)
+    evidence_dir = engine.state_root / "integration-evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    finding_path = evidence_dir / "review-finding.json"
+    write_review_finding(finding_path, "finding-integration", status="CLOSED")
+    engine.advance(
+        "ftic-governance-1",
+        "INTEGRATING",
+        actor="REVIEWER",
+        evidence_paths=write_reviewer_transition_evidence(
+            engine,
+            [finding_path],
+            target="INTEGRATING",
+        ),
+        created_at_utc=f"2026-08-23T{hour:02d}:07:00Z",
+    )
+    return finding_path
 
 
 def write_review_finding(path: Path, finding_id: str, *, status: str) -> bytes:
@@ -563,12 +615,16 @@ class WorkflowEngineTests(unittest.TestCase):
                 json.dumps(foreign_verification, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            verifier_evidence = write_verifier_transition_evidence(
+                engine,
+                [verification_path],
+            )
             with self.assertRaises(WorkflowEngineError):
                 engine.advance(
                     "ftic-governance-1",
                     "VERIFIED",
                     actor="VERIFIER",
-                    evidence_paths=[verification_path],
+                    evidence_paths=verifier_evidence,
                     created_at_utc="2026-08-23T01:02:00Z",
                 )
             verification_path.write_text(
@@ -580,14 +636,14 @@ class WorkflowEngineTests(unittest.TestCase):
                     "ftic-governance-1",
                     "VERIFIED",
                     actor="CODER",
-                    evidence_paths=[verification_path],
+                    evidence_paths=verifier_evidence,
                     created_at_utc="2026-08-23T01:02:00Z",
                 )
             state = engine.advance(
                 "ftic-governance-1",
                 "VERIFIED",
                 actor="VERIFIER",
-                evidence_paths=[verification_path],
+                evidence_paths=verifier_evidence,
                 created_at_utc="2026-08-23T01:02:00Z",
             )
             self.assertEqual(state["current_state"], "VERIFIED")
@@ -618,6 +674,174 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(state["current_state"], "RC_READY")
             self.assertEqual(len(engine.audit("ftic-governance-1")), 10)
             self.assertEqual(tree_bytes(MVP_FTIC_ROOT), managed_before)
+
+    def test_verified_requires_bound_verifier_result_and_hashes_all_evidence(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_integrating(engine, hour=2)
+            verification_path = state_root / "verification.json"
+            verification_path.write_bytes(
+                canonical_json_bytes(valid_verification_record()) + b"\n"
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "canonical VERIFIER packet and result",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "VERIFIED",
+                    actor="VERIFIER",
+                    evidence_paths=[verification_path],
+                    created_at_utc="2026-08-23T02:08:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+            evidence_paths = write_verifier_transition_evidence(
+                engine,
+                [verification_path],
+            )
+            state = engine.advance(
+                "ftic-governance-1",
+                "VERIFIED",
+                actor="VERIFIER",
+                evidence_paths=evidence_paths,
+                created_at_utc="2026-08-23T02:09:00Z",
+            )
+
+            self.assertEqual(state["current_state"], "VERIFIED")
+            self.assertEqual(
+                [
+                    binding["content_sha256"]
+                    for binding in engine.audit("ftic-governance-1")[-1]["evidence_bindings"]
+                ],
+                [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence_paths],
+            )
+
+    def test_verified_requires_current_completed_verifier_result_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        packet = valid_verifier_packet()
+        result = valid_verifier_result()
+        verification = valid_verification_record()
+        cases = (
+            (
+                "wrong task",
+                dict(packet, task_id="other-task"),
+                result,
+                verification,
+                "project_id and task_id must match",
+            ),
+            (
+                "mismatched packet",
+                packet,
+                dict(result, packet_id="other-verifier-v1"),
+                verification,
+                "packet_id does not match",
+            ),
+            (
+                "unfinished result",
+                packet,
+                dict(result, status="NEEDS_CONTEXT"),
+                verification,
+                "completed VERIFIER result",
+            ),
+            (
+                "wrong next state",
+                packet,
+                dict(result, recommended_next_state="WAITING_HUMAN"),
+                verification,
+                "recommend VERIFIED",
+            ),
+            (
+                "foreign verification",
+                packet,
+                result,
+                dict(verification, task_id="other-task"),
+                "verification evidence project_id and task_id must match",
+            ),
+        )
+        for name, candidate_packet, candidate_result, candidate_verification, message in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                advance_to_integrating(engine, hour=3)
+                verification_path = state_root / "verification.json"
+                verification_path.write_bytes(
+                    canonical_json_bytes(candidate_verification) + b"\n"
+                )
+                evidence_paths = write_verifier_transition_evidence(
+                    engine,
+                    [verification_path],
+                    packet=candidate_packet,
+                    result=candidate_result,
+                )
+                before = tree_bytes(state_root)
+
+                with self.assertRaisesRegex(WorkflowEngineError, message):
+                    engine.advance(
+                        "ftic-governance-1",
+                        "VERIFIED",
+                        actor="VERIFIER",
+                        evidence_paths=evidence_paths,
+                        created_at_utc="2026-08-23T03:08:00Z",
+                    )
+
+                self.assertEqual(tree_bytes(state_root), before)
+
+    def test_verified_rejects_result_replaced_after_validation_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_integrating(engine, hour=4)
+            verification_path = state_root / "verification.json"
+            verification_path.write_bytes(
+                canonical_json_bytes(valid_verification_record()) + b"\n"
+            )
+            packet_path, result_path, bound_verification_path = write_verifier_transition_evidence(
+                engine,
+                [verification_path],
+            )
+            replacement = dict(
+                valid_verifier_result(),
+                status="BLOCKED",
+                blocker="Verifier result was replaced after validation.",
+                recommended_next_state="WAITING_HUMAN",
+            )
+            replacement_payload = canonical_json_bytes(replacement) + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_before_binding(path, *args):
+                if Path(path) == result_path:
+                    result_path.write_bytes(replacement_payload)
+                return original_binding(path, *args)
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_before_binding,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "VERIFIED evidence changed after validation",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "VERIFIED",
+                    actor="VERIFIER",
+                    evidence_paths=[packet_path, result_path, bound_verification_path],
+                    created_at_utc="2026-08-23T04:08:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
     def test_fix_required_requires_reviewer_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
@@ -1041,6 +1265,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            stale_evidence = write_verifier_transition_evidence(engine, [stale])
             before = tree_bytes(state_root)
 
             with self.assertRaisesRegex(WorkflowEngineError, "integration boundary"):
@@ -1048,7 +1273,7 @@ class WorkflowEngineTests(unittest.TestCase):
                     "ftic-governance-1",
                     "VERIFIED",
                     actor="VERIFIER",
-                    evidence_paths=[stale],
+                    evidence_paths=stale_evidence,
                     created_at_utc="2026-08-23T15:14:00Z",
                 )
 
@@ -1062,11 +1287,12 @@ class WorkflowEngineTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            fresh_evidence = write_verifier_transition_evidence(engine, [fresh])
             verified = engine.advance(
                 "ftic-governance-1",
                 "VERIFIED",
                 actor="VERIFIER",
-                evidence_paths=[fresh],
+                evidence_paths=fresh_evidence,
                 created_at_utc="2026-08-23T15:15:00Z",
             )
             self.assertEqual(verified["current_state"], "VERIFIED")

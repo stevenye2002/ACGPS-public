@@ -131,6 +131,14 @@ Both commands write only to stdout. They do not launch a process, change
 workflow state, inspect verification records, or authorize `INTEGRATING ->
 VERIFIED`; those remain separate controller operations.
 
+For an operator-authorized `INTEGRATING -> VERIFIED` transition, provide the
+same canonical Verifier packet first, its canonical result second, and one or
+more verification records after them. The controller admits `VERIFIED` only
+when the Verifier result is complete, bound to the current project/task packet,
+and recommends `VERIFIED`. Existing verification-record identity and freshness
+rules still apply, and every supplied evidence file is SHA-256-bound into the
+transition audit. Record-only `VERIFIED` requests are rejected.
+
 This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs

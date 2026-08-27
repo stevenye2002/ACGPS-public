@@ -18,6 +18,7 @@ from acgps.review_adapter import (
 from acgps.supervised_handoff import (
     build_supervised_coder_result_receipt_preview,
     build_supervised_reviewer_result_receipt_preview,
+    build_supervised_verifier_result_receipt_preview,
 )
 from acgps.workflow_contracts import (
     canonical_json_bytes,
@@ -391,23 +392,7 @@ class WorkflowEngine:
             elif target == "TASK_REVIEW":
                 return self._validate_task_review_evidence(paths, current)
             elif target == "VERIFIED":
-                verified = False
-                boundary = self._fix_cycle_integration_boundary(current)
-                for path in paths:
-                    record = self._read_json(path)
-                    validate_contract("verification_record", record, mode="runtime")
-                    if record["project_id"] != current["project_id"] or record["task_id"] != current["task_id"]:
-                        raise WorkflowEngineError(
-                            "verification evidence project_id and task_id must match the current task"
-                        )
-                    if record["recommendation"] == "VERIFIED":
-                        if boundary is not None and self._utc_instant(record["verified_at_utc"]) < boundary:
-                            raise WorkflowEngineError(
-                                "verification evidence predates the current fix-cycle integration boundary"
-                            )
-                        verified = True
-                if not verified:
-                    raise WorkflowEngineError("VERIFIED requires a successful verification record")
+                return self._validate_verifier_transition_evidence(paths, current)
             elif target == "RC_READY":
                 if not any(
                     verify_release_candidate_manifest(
@@ -502,6 +487,61 @@ class WorkflowEngine:
                 raise WorkflowEngineError(f"{target} review finding changed during validation")
             finding_snapshots.append(snapshot)
         return [packet_snapshot, result_snapshot, *finding_snapshots]
+
+    def _validate_verifier_transition_evidence(
+        self,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> list[tuple[str, int, str]]:
+        if len(paths) < 3:
+            raise WorkflowEngineError(
+                "VERIFIED requires the canonical VERIFIER packet and result "
+                "followed by verification records"
+            )
+        packet, packet_snapshot = self._read_canonical_evidence_json(paths[0])
+        agent_result, result_snapshot = self._read_canonical_evidence_json(paths[1])
+        try:
+            build_supervised_verifier_result_receipt_preview(packet, agent_result)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            packet["project_id"] != current["project_id"]
+            or packet["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "VERIFIER packet project_id and task_id must match the current task"
+            )
+        if agent_result["status"] not in {"DONE", "DONE_WITH_CONCERNS"}:
+            raise WorkflowEngineError("VERIFIED requires a completed VERIFIER result")
+        if agent_result["recommended_next_state"] != "VERIFIED":
+            raise WorkflowEngineError("VERIFIER result must recommend VERIFIED")
+
+        verified = False
+        boundary = self._fix_cycle_integration_boundary(current)
+        verification_snapshots: list[tuple[str, int, str]] = []
+        for path in paths[2:]:
+            record, snapshot = self._read_evidence_json_snapshot(path)
+            validate_contract("verification_record", record, mode="runtime")
+            if (
+                record["project_id"] != current["project_id"]
+                or record["task_id"] != current["task_id"]
+            ):
+                raise WorkflowEngineError(
+                    "verification evidence project_id and task_id must match the current task"
+                )
+            if record["recommendation"] == "VERIFIED":
+                if (
+                    boundary is not None
+                    and self._utc_instant(record["verified_at_utc"]) < boundary
+                ):
+                    raise WorkflowEngineError(
+                        "verification evidence predates the current fix-cycle integration boundary"
+                    )
+                verified = True
+            verification_snapshots.append(snapshot)
+        if not verified:
+            raise WorkflowEngineError("VERIFIED requires a successful verification record")
+        return [packet_snapshot, result_snapshot, *verification_snapshots]
 
     def _current_fix_cycle_blocker_ids(self, current: dict[str, Any]) -> set[str]:
         blocker_ids: set[str] = set()

@@ -868,6 +868,35 @@ class MVPCLITests(unittest.TestCase):
             )
             + b"\n"
         )
+        verifier_packet_path = self.state_root / "packets" / "verifier.json"
+        verifier_packet = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "VERIFIER",
+            "--created-at-utc",
+            "2026-08-23T00:00:33Z",
+            "--output",
+            str(verifier_packet_path),
+        )
+        verifier_result_path = self.state_root / "packets" / "verifier-result.json"
+        verifier_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=verifier_packet["packet_id"],
+                    role="VERIFIER",
+                    summary="Completed the bounded independent verification.",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="VERIFIED",
+                )
+            )
+            + b"\n"
+        )
 
         rc_dir = self.state_root / "rc"
         source = rc_dir / "evidence" / "source-artifact.txt"
@@ -894,10 +923,14 @@ class MVPCLITests(unittest.TestCase):
                 "REVIEWER",
                 [reviewer_packet_path, reviewer_result_path, review],
             ),
-            ("VERIFIED", "VERIFIER", [verification]),
+            (
+                "VERIFIED",
+                "VERIFIER",
+                [verifier_packet_path, verifier_result_path, verification],
+            ),
         ]
         for index, (target, actor, evidence_paths) in enumerate(transitions, start=1):
-            if target in {"TASK_REVIEW", "INTEGRATING"}:
+            if target in {"TASK_REVIEW", "INTEGRATING", "VERIFIED"}:
                 before = self._run(
                     "task",
                     "status",
@@ -919,7 +952,13 @@ class MVPCLITests(unittest.TestCase):
                     "--created-at-utc",
                     f"2026-08-23T00:{index:02d}:00Z",
                     "--evidence",
-                    str(source if target == "TASK_REVIEW" else review),
+                    str(
+                        source
+                        if target == "TASK_REVIEW"
+                        else review
+                        if target == "INTEGRATING"
+                        else verification
+                    ),
                     expected_exit=2,
                 )
                 self.assertEqual(rejection["status"], "REJECTED")
