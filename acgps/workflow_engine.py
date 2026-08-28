@@ -452,6 +452,10 @@ class WorkflowEngine:
                 "RC_READY requires the latest VERIFIED audit evidence lineage"
             )
 
+        packet, _ = self._read_bound_canonical_evidence_json(bindings[0])
+        agent_result, _ = self._read_bound_canonical_evidence_json(bindings[1])
+        self._validate_verifier_result_binding(packet, agent_result, "VERIFIED", current)
+
         verified_snapshots: list[tuple[str, int, str]] = []
         for binding in bindings[2:]:
             record, snapshot = self._read_bound_evidence_json_snapshot(binding)

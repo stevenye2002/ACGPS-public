@@ -1523,6 +1523,99 @@ class WorkflowEngineTests(unittest.TestCase):
                     created_at_utc="2026-08-23T01:10:00Z",
                 )
 
+    def test_rc_ready_rejects_legacy_record_only_verified_layout(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            review_path = advance_to_integrating(engine, hour=1)
+            legacy_paths = [
+                write_verification_record(
+                    state_root / f"legacy-verification-{index}.json",
+                    f"legacy-verification-{index}",
+                )
+                for index in range(1, 4)
+            ]
+            legacy_snapshots = [
+                engine._read_evidence_json_snapshot(path)[1]
+                for path in legacy_paths
+            ]
+            with patch.object(
+                engine,
+                "_validate_gate_evidence",
+                return_value=legacy_snapshots,
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "VERIFIED",
+                    actor="VERIFIER",
+                    evidence_paths=legacy_paths,
+                    created_at_utc="2026-08-23T01:08:00Z",
+                )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=legacy_paths[2:],
+            )
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaises(WorkflowEngineError):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_rc_ready_rejects_mutated_bound_verifier_packet(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            packet_path = (
+                state_root
+                / "verifier-transition-evidence"
+                / "verifier-packet.json"
+            )
+            packet_path.write_bytes(
+                canonical_json_bytes(
+                    dict(valid_verifier_packet(), packet_id="tampered-verifier-packet")
+                )
+                + b"\n"
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=verification_paths,
+            )
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "bound evidence binding content changed",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_rc_ready_accepts_reordered_exact_latest_verified_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp) / "state"
