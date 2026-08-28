@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -426,9 +427,49 @@ class WorkflowEngine:
                     expected_task_id=current["task_id"],
                 ):
                     raise WorkflowEngineError("RC_READY requires a valid release-candidate manifest")
+                self._validate_rc_verification_lineage(manifest, paths[0], current)
                 return [snapshot]
         except (ContractValidationError, ReviewEvidenceError) as exc:
             raise WorkflowEngineError(str(exc)) from exc
+
+    def _validate_rc_verification_lineage(
+        self,
+        manifest: dict[str, Any],
+        manifest_path: Path,
+        current: dict[str, Any],
+    ) -> None:
+        latest_verified = next(
+            (
+                event
+                for event in reversed(self._trusted_audit_lineage(current))
+                if event["to_state"] == "VERIFIED"
+            ),
+            None,
+        )
+        bindings = latest_verified.get("evidence_bindings") if latest_verified else None
+        if not isinstance(bindings, list) or len(bindings) < 3:
+            raise WorkflowEngineError(
+                "RC_READY requires the latest VERIFIED audit evidence lineage"
+            )
+
+        verified_snapshots: list[tuple[str, int, str]] = []
+        for binding in bindings[2:]:
+            record, snapshot = self._read_bound_evidence_json_snapshot(binding)
+            validate_contract("verification_record", record, mode="runtime")
+            if record["recommendation"] == "VERIFIED":
+                verified_snapshots.append(snapshot)
+
+        manifest_snapshots = [
+            self._read_evidence_json_snapshot(
+                manifest_path.parent / relative_path
+            )[1]
+            for relative_path in manifest["verification_records"]
+        ]
+        if Counter(manifest_snapshots) != Counter(verified_snapshots):
+            raise WorkflowEngineError(
+                "RC_READY manifest verification records must exactly match "
+                "the latest VERIFIED audit evidence"
+            )
 
     def _validate_planner_transition_evidence(
         self,

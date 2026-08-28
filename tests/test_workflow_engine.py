@@ -274,6 +274,57 @@ def write_review_finding(path: Path, finding_id: str, *, status: str) -> bytes:
     return payload
 
 
+def write_verification_record(path: Path, verification_id: str) -> Path:
+    record = dict(valid_verification_record(), verification_id=verification_id)
+    path.write_bytes(canonical_json_bytes(record) + b"\n")
+    return path
+
+
+def build_test_release_candidate_manifest(
+    engine,
+    *,
+    review_path: Path,
+    verification_paths: list[Path],
+) -> Path:
+    source_path = engine.state_root / "source.txt"
+    source_path.write_text("frozen governance source\n", encoding="utf-8")
+    rollback_path = engine.state_root / "rollback.md"
+    rollback_path.write_text("Remove generated runtime state.\n", encoding="utf-8")
+    return build_release_candidate_manifest(
+        output_dir=engine.state_root,
+        project_id="FTIC",
+        rc_id="ftic-governance-rc-1",
+        version="1.0",
+        source_path=source_path,
+        verification_paths=verification_paths,
+        review_paths=[review_path],
+        rollback_path=rollback_path,
+        created_at_utc="2026-08-23T01:09:00Z",
+    )
+
+
+def prepare_verified_rc_lineage(
+    state_root: Path,
+    verification_ids: list[str],
+):
+    from acgps.workflow_engine import WorkflowEngine
+
+    engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+    review_path = advance_to_integrating(engine, hour=1)
+    verification_paths = [
+        write_verification_record(state_root / f"{verification_id}.json", verification_id)
+        for verification_id in verification_ids
+    ]
+    engine.advance(
+        "ftic-governance-1",
+        "VERIFIED",
+        actor="VERIFIER",
+        evidence_paths=write_verifier_transition_evidence(engine, verification_paths),
+        created_at_utc="2026-08-23T01:08:00Z",
+    )
+    return engine, review_path, verification_paths
+
+
 def start_recovery_generation(engine, state: dict[str, object], *, created_at_utc: str) -> None:
     current_generation = int(state["audit_generation"])
     next_generation = current_generation + 1
@@ -1380,6 +1431,120 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_rc_ready_rejects_valid_verification_outside_latest_verified_event(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, review_path, _ = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            stale_path = write_verification_record(
+                state_root / "stale-verification.json",
+                "verification-stale",
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=[stale_path],
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "latest VERIFIED audit evidence",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1")["current_state"], "VERIFIED")
+
+    def test_rc_ready_rejects_missing_latest_verified_record(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-a", "verification-b"],
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=verification_paths[:1],
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "latest VERIFIED audit evidence",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+    def test_rc_ready_rejects_additional_verification_record(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            additional_path = write_verification_record(
+                state_root / "additional-verification.json",
+                "verification-additional",
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=[*verification_paths, additional_path],
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "latest VERIFIED audit evidence",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+    def test_rc_ready_accepts_reordered_exact_latest_verified_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-a", "verification-b"],
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=list(reversed(verification_paths)),
+            )
+
+            state = engine.advance(
+                "ftic-governance-1",
+                "RC_READY",
+                actor="VERIFIER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-23T01:10:00Z",
+            )
+
+            self.assertEqual(state["current_state"], "RC_READY")
 
     def test_verified_requires_bound_verifier_result_and_hashes_all_evidence(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
