@@ -465,6 +465,98 @@ class WorkflowEngineTests(unittest.TestCase):
                 reader.intake(valid_intake())
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_next_action_preview_derives_multi_blocker_evidence_counts_from_audit(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(writer, hour=6)
+            evidence_dir = state_root / "preview-evidence"
+            evidence_dir.mkdir()
+            open_a = evidence_dir / "open-a.json"
+            open_b = evidence_dir / "open-b.json"
+            write_review_finding(open_a, "finding-a", status="OPEN")
+            write_review_finding(open_b, "finding-b", status="OPEN")
+            writer.advance(
+                "ftic-governance-1",
+                "FIX_REQUIRED",
+                actor="REVIEWER",
+                evidence_paths=write_reviewer_transition_evidence(
+                    writer,
+                    [open_a, open_b],
+                    target="FIX_REQUIRED",
+                ),
+                created_at_utc="2026-08-27T06:07:00Z",
+            )
+            before_fix_preview = tree_bytes(state_root)
+
+            fix_preview = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).next_action_preview("ftic-governance-1")
+            implementing = next(
+                option
+                for option in fix_preview["options"]
+                if option["target_state"] == "IMPLEMENTING"
+            )
+
+            self.assertEqual(
+                implementing["evidence_contract"],
+                {
+                    "status": "BOUND_EXISTING_CONTRACT",
+                    "minimum_count": 3,
+                    "maximum_count": 3,
+                    "ordered_kinds": [
+                        "CODER_TASK_PACKET",
+                        "CURRENT_BLOCKING_REMEDIATION_EVIDENCE",
+                    ],
+                    "repeatable_tail": True,
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before_fix_preview)
+
+            writer.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=write_coder_remediation_handoff_evidence(
+                    writer,
+                    [open_a, open_b],
+                ),
+                created_at_utc="2026-08-27T06:08:00Z",
+            )
+            writer.advance(
+                "ftic-governance-1",
+                "TASK_REVIEW",
+                actor="CODER",
+                evidence_paths=write_task_review_evidence(writer),
+                created_at_utc="2026-08-27T06:09:00Z",
+            )
+            before_review_preview = tree_bytes(state_root)
+
+            review_preview = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).next_action_preview("ftic-governance-1")
+            integrating = next(
+                option
+                for option in review_preview["options"]
+                if option["target_state"] == "INTEGRATING"
+            )
+
+            self.assertEqual(integrating["evidence_contract"]["minimum_count"], 4)
+            self.assertIsNone(integrating["evidence_contract"]["maximum_count"])
+            self.assertEqual(tree_bytes(state_root), before_review_preview)
+
     def test_planning_gates_require_planner_actor_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

@@ -197,7 +197,7 @@ class WorkflowEngine:
                         target,
                     ),
                     "evidence_contract": self._preview_evidence_contract(
-                        current["current_state"],
+                        current,
                         target,
                     ),
                 }
@@ -470,8 +470,11 @@ class WorkflowEngine:
             return "RELEASE_CANDIDATE_MANIFEST"
         return "GENERIC_EVIDENCE"
 
-    @classmethod
-    def _preview_evidence_contract(cls, from_state: str, target: str) -> dict[str, Any]:
+    def _preview_evidence_contract(
+        self,
+        current: dict[str, Any],
+        target: str,
+    ) -> dict[str, Any]:
         def bound(
             ordered_kinds: list[str],
             *,
@@ -487,7 +490,7 @@ class WorkflowEngine:
                 "repeatable_tail": repeatable_tail,
             }
 
-        evidence_kind = cls._gate_evidence_kind(from_state, target)
+        evidence_kind = self._gate_evidence_kind(current["current_state"], target)
         if evidence_kind == "PLANNER_RESULT":
             return bound(
                 ["PLANNER_TASK_PACKET", "PLANNER_RESULT"],
@@ -501,10 +504,11 @@ class WorkflowEngine:
                 maximum_count=1,
             )
         if evidence_kind == "CODER_REMEDIATION_HANDOFF":
+            evidence_count = 1 + len(self._current_fix_cycle_blockers(current))
             return bound(
                 ["CODER_TASK_PACKET", "CURRENT_BLOCKING_REMEDIATION_EVIDENCE"],
-                minimum_count=2,
-                maximum_count=None,
+                minimum_count=evidence_count,
+                maximum_count=evidence_count,
                 repeatable_tail=True,
             )
         if evidence_kind == "VERIFIER_RESULT":
@@ -515,9 +519,15 @@ class WorkflowEngine:
                 repeatable_tail=True,
             )
         if evidence_kind == "REVIEWER_RESULT":
+            minimum_count = 3
+            if target == "INTEGRATING":
+                minimum_count = 2 + max(
+                    1,
+                    len(self._current_fix_cycle_blocker_ids(current)),
+                )
             return bound(
                 ["REVIEWER_TASK_PACKET", "REVIEWER_RESULT", "REVIEW_FINDING"],
-                minimum_count=3,
+                minimum_count=minimum_count,
                 maximum_count=None,
                 repeatable_tail=True,
             )
@@ -531,7 +541,10 @@ class WorkflowEngine:
         if evidence_kind == "INTEGRATING_FINDINGS":
             return bound(
                 ["REVIEW_FINDING"],
-                minimum_count=1,
+                minimum_count=max(
+                    1,
+                    len(self._current_fix_cycle_blocker_ids(current)),
+                ),
                 maximum_count=None,
                 repeatable_tail=True,
             )
