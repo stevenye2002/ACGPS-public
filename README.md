@@ -34,6 +34,28 @@ python scripts/check.py setup
 python scripts/check.py full
 ```
 
+## Read-only task audit verification
+
+An operator can verify the complete trusted audit lineage bound to the current
+task-state identity without changing workflow state:
+
+```powershell
+python -m acgps task audit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The command validates every trusted generation from the current audit head back
+to generation one, including event identity, sequence, hash-chain, predecessor,
+and authoritative-tail bindings. It then re-reads the task state and fails
+closed if its identity changed during the query. The JSON result reports only
+the verified task identity, generation and event counts, and audit head; it
+does not return the full audit transcript, launch a model or process, write
+state, or authorize a workflow transition.
+
 ## Supervised planner handoff preview
 
 Before choosing a workflow transition, an operator can inspect the current

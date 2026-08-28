@@ -172,6 +172,34 @@ class WorkflowEngine:
         except WorkflowStoreError as exc:
             raise WorkflowEngineError(str(exc)) from exc
 
+    def audit_lineage_verification(self, task_id: str) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        if self.status(task_id) != current:
+            raise WorkflowEngineError(
+                "task state identity changed during audit lineage verification"
+            )
+        return {
+            "status": "AUDIT_LINEAGE_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "audit_generation": current["audit_generation"],
+            "trusted_generation_count": len(
+                {event["generation"] for event in trusted_lineage}
+            ),
+            "trusted_event_count": len(trusted_lineage),
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def next_action_preview(self, task_id: str) -> dict[str, Any]:
         current = self.status(task_id)
         self._trusted_audit_lineage(current)

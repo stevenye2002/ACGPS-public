@@ -140,6 +140,10 @@ def _build_parser() -> argparse.ArgumentParser:
     task_status.add_argument("--task-id", required=True)
     task_status.add_argument("--include-audit", action="store_true")
 
+    task_audit_verify = task_commands.add_parser("audit-verify")
+    _add_project_arguments(task_audit_verify, include_state=True)
+    task_audit_verify.add_argument("--task-id", required=True)
+
     task_next_action_preview = task_commands.add_parser("next-action-preview")
     _add_project_arguments(task_next_action_preview, include_state=True)
     task_next_action_preview.add_argument("--task-id", required=True)
@@ -286,6 +290,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         engine = _engine(args)
         state = engine.status(args.task_id)
         return {"state": state, "audit": engine.audit(args.task_id)} if args.include_audit else state
+
+    if args.group == "task" and args.command == "audit-verify":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).audit_lineage_verification(args.task_id)
 
     if args.group == "task" and args.command == "next-action-preview":
         return WorkflowEngine(

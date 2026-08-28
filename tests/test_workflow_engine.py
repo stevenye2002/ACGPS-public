@@ -416,6 +416,79 @@ def start_recovery_generation(engine, state: dict[str, object], *, created_at_ut
 
 
 class WorkflowEngineTests(unittest.TestCase):
+    def test_audit_lineage_verification_derives_multi_generation_identity_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            start_recovery_generation(
+                writer,
+                writer.status("ftic-governance-1"),
+                created_at_utc="2026-08-28T09:00:00Z",
+            )
+            current = writer.status("ftic-governance-1")
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            result = reader.audit_lineage_verification("ftic-governance-1")
+
+            self.assertEqual(
+                result,
+                {
+                    "status": "AUDIT_LINEAGE_VERIFIED",
+                    "task_id": "ftic-governance-1",
+                    "project_id": "FTIC",
+                    "current_state": "DRAFT",
+                    "audit_generation": 2,
+                    "trusted_generation_count": 2,
+                    "trusted_event_count": 2,
+                    "audit_head_event_id": "evt-ftic-governance-1-recovery-0002",
+                    "audit_head_hash": current["audit_head_hash"],
+                    "state_identity_status": "UNCHANGED_DURING_QUERY",
+                    "controls": {
+                        "model_execution": "NOT_STARTED",
+                        "process_launch": "NOT_STARTED",
+                        "state_write": "NOT_PERFORMED",
+                        "workflow_transition": "NOT_PERFORMED",
+                    },
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_audit_lineage_verification_rejects_task_state_identity_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            initial = reader.status("ftic-governance-1")
+            changed = dict(initial, updated_at_utc="2026-08-28T09:01:00Z")
+
+            with patch.object(reader, "status", side_effect=[initial, changed]):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "task state identity changed during audit lineage verification",
+                ):
+                    reader.audit_lineage_verification("ftic-governance-1")
+
     def test_next_action_preview_derives_existing_plan_ready_contract_without_mutation(
         self,
     ) -> None:
