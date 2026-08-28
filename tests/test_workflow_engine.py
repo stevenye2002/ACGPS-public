@@ -2281,6 +2281,243 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_verified_to_closed_preview_exposes_exact_latest_verifier_contract_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, _ = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-first", "verification-second"],
+            )
+            verified_event = writer.audit("ftic-governance-1")[-1]
+            evidence_paths = [
+                writer._bound_evidence_path(binding)
+                for binding in verified_event["evidence_bindings"]
+            ]
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            next_action = reader.next_action_preview("ftic-governance-1")
+            closed_option = next(
+                option
+                for option in next_action["options"]
+                if option["target_state"] == "CLOSED"
+            )
+            self.assertEqual(
+                closed_option,
+                {
+                    "target_state": "CLOSED",
+                    "required_actor": "CONTROLLER",
+                    "evidence_contract": {
+                        "status": "BOUND_EXISTING_CONTRACT",
+                        "minimum_count": 4,
+                        "maximum_count": 4,
+                        "ordered_kinds": [
+                            "VERIFIER_TASK_PACKET",
+                            "VERIFIER_RESULT",
+                            "VERIFICATION_RECORD",
+                        ],
+                        "repeatable_tail": True,
+                    },
+                },
+            )
+
+            preview = reader.direct_transition_gate_preview(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=evidence_paths,
+                created_at_utc="2026-08-23T01:09:00Z",
+            )
+
+            self.assertEqual(preview["current_state"], "VERIFIED")
+            self.assertEqual(preview["target_state"], "CLOSED")
+            self.assertEqual(preview["required_actor"], "CONTROLLER")
+            self.assertEqual(preview["evidence_status"], "VALIDATED")
+            self.assertEqual(
+                [
+                    (
+                        binding["path"],
+                        binding["size_bytes"],
+                        binding["content_sha256"],
+                    )
+                    for binding in preview["evidence_bindings"]
+                ],
+                [
+                    (
+                        binding["path"],
+                        binding["size_bytes"],
+                        binding["content_sha256"],
+                    )
+                    for binding in verified_event["evidence_bindings"]
+                ],
+            )
+            self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_verified_to_closed_rejects_non_controller_and_unbound_evidence_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, _ = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            verified_event = writer.audit("ftic-governance-1")[-1]
+            evidence_paths = [
+                writer._bound_evidence_path(binding)
+                for binding in verified_event["evidence_bindings"]
+            ]
+            copied_packet = state_root / "copied-verifier-packet.json"
+            copied_packet.write_bytes(evidence_paths[0].read_bytes())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CLOSED requires actor CONTROLLER",
+            ):
+                reader.direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="VERIFIER",
+                    evidence_paths=evidence_paths,
+                    created_at_utc="2026-08-23T01:09:00Z",
+                )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CLOSED evidence must exactly match the latest trusted VERIFIED audit evidence",
+            ):
+                reader.direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=[copied_packet, *evidence_paths[1:]],
+                    created_at_utc="2026-08-23T01:09:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_verified_to_closed_commits_exact_latest_verifier_evidence_as_controller(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, _, _ = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            verified_event = engine.audit("ftic-governance-1")[-1]
+            evidence_paths = [
+                engine._bound_evidence_path(binding)
+                for binding in verified_event["evidence_bindings"]
+            ]
+
+            state = engine.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=evidence_paths,
+                created_at_utc="2026-08-23T01:09:00Z",
+            )
+
+            event = engine.audit("ftic-governance-1")[-1]
+            self.assertEqual(state["current_state"], "CLOSED")
+            self.assertEqual(event["from_state"], "VERIFIED")
+            self.assertEqual(event["to_state"], "CLOSED")
+            self.assertEqual(event["actor"], "CONTROLLER")
+            self.assertEqual(
+                [
+                    (
+                        binding["path"],
+                        binding["size_bytes"],
+                        binding["content_sha256"],
+                    )
+                    for binding in event["evidence_bindings"]
+                ],
+                [
+                    (
+                        binding["path"],
+                        binding["size_bytes"],
+                        binding["content_sha256"],
+                    )
+                    for binding in verified_event["evidence_bindings"]
+                ],
+            )
+
+    def test_verified_to_closed_revalidates_evidence_after_event_construction(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, _, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            verified_event = engine.audit("ftic-governance-1")[-1]
+            evidence_paths = [
+                engine._bound_evidence_path(binding)
+                for binding in verified_event["evidence_bindings"]
+            ]
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_canonical_sha = engine._canonical_sha
+            evidence_mutated = False
+
+            def mutate_evidence_while_hashing_closed_event(record):
+                nonlocal evidence_mutated
+                digest = original_canonical_sha(record)
+                if (
+                    not evidence_mutated
+                    and record.get("event_type") == "TRANSITION_ACCEPTED"
+                    and record.get("to_state") == "CLOSED"
+                ):
+                    write_verification_record(
+                        verification_paths[0],
+                        "verification-mutated-after-event-construction",
+                    )
+                    evidence_mutated = True
+                return digest
+
+            with patch.object(
+                engine,
+                "_canonical_sha",
+                side_effect=mutate_evidence_while_hashing_closed_event,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CLOSED evidence must exactly match the latest trusted VERIFIED audit evidence",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=evidence_paths,
+                    created_at_utc="2026-08-23T01:09:00Z",
+                )
+
+            self.assertTrue(evidence_mutated)
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_rc_ready_to_closed_rejects_actor_other_than_controller(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

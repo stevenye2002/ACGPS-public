@@ -1699,6 +1699,80 @@ class MVPCLITests(unittest.TestCase):
             state = self._run(*arguments)
             self.assertEqual(state["current_state"], target)
 
+        verified_before = self._state_root_identity(self.state_root)
+        next_action = self._run(
+            "task",
+            "next-action-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+        closed_option = next(
+            option
+            for option in next_action["options"]
+            if option["target_state"] == "CLOSED"
+        )
+        self.assertEqual(
+            closed_option,
+            {
+                "target_state": "CLOSED",
+                "required_actor": "CONTROLLER",
+                "evidence_contract": {
+                    "status": "BOUND_EXISTING_CONTRACT",
+                    "minimum_count": 3,
+                    "maximum_count": 3,
+                    "ordered_kinds": [
+                        "VERIFIER_TASK_PACKET",
+                        "VERIFIER_RESULT",
+                        "VERIFICATION_RECORD",
+                    ],
+                    "repeatable_tail": True,
+                },
+            },
+        )
+
+        verified_closure_preview_arguments = [
+            "task",
+            "gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "CLOSED",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-23T00:09:00Z",
+        ]
+        for evidence_path in (
+            verifier_packet_path,
+            verifier_result_path,
+            verification,
+        ):
+            verified_closure_preview_arguments.extend(("--evidence", str(evidence_path)))
+        verified_closure_preview = self._run(*verified_closure_preview_arguments)
+        self.assertEqual(
+            verified_closure_preview["status"],
+            "DIRECT_TRANSITION_GATE_PREVIEW",
+        )
+        self.assertEqual(verified_closure_preview["current_state"], "VERIFIED")
+        self.assertEqual(verified_closure_preview["target_state"], "CLOSED")
+        self.assertEqual(verified_closure_preview["required_actor"], "CONTROLLER")
+        self.assertEqual(verified_closure_preview["evidence_status"], "VALIDATED")
+        self.assertEqual(
+            verified_closure_preview["authorization_status"],
+            "NOT_GRANTED",
+        )
+        self.assertEqual(
+            verified_closure_preview["controls"]["state_write"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(
+            verified_closure_preview["controls"]["workflow_transition"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), verified_before)
+
         manifest_result = self._run(
             "rc",
             "prepare",

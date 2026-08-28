@@ -655,6 +655,12 @@ class WorkflowEngine:
                 evidence_bindings,
                 current,
             )
+        elif gate_source_state == "VERIFIED" and actual_target == "CLOSED":
+            self._revalidate_verified_closure_evidence(
+                evidence_items,
+                evidence_bindings,
+                current,
+            )
         return {
             "current": current,
             "gate_source_state": gate_source_state,
@@ -822,6 +828,12 @@ class WorkflowEngine:
                 evidence_bindings,
                 current,
             )
+        elif prepared["gate_source_state"] == "VERIFIED" and actual_target == "CLOSED":
+            self._revalidate_verified_closure_evidence(
+                prepared["evidence_items"],
+                evidence_bindings,
+                current,
+            )
         try:
             self.store.commit_task_state_and_audit(event, state)
         except WorkflowStoreError as exc:
@@ -880,6 +892,7 @@ class WorkflowEngine:
             ("PLAN_READY", "IMPLEMENTING"): "CODER",
             ("FIX_REQUIRED", "IMPLEMENTING"): "CODER",
             ("INTEGRATING", "FIX_REQUIRED"): "VERIFIER",
+            ("VERIFIED", "CLOSED"): "CONTROLLER",
             ("RC_READY", "CLOSED"): "CONTROLLER",
         }.get((from_state, target)) or {
             "FIX_REQUIRED": "REVIEWER",
@@ -902,6 +915,8 @@ class WorkflowEngine:
             return "CODER_REMEDIATION_HANDOFF"
         if (from_state, target) == ("INTEGRATING", "FIX_REQUIRED"):
             return "VERIFIER_RESULT"
+        if (from_state, target) == ("VERIFIED", "CLOSED"):
+            return "VERIFIED_CLOSURE_EVIDENCE"
         if (from_state, target) == ("RC_READY", "CLOSED"):
             return "RELEASE_CANDIDATE_MANIFEST"
         if from_state == "TASK_REVIEW" and target in {"FIX_REQUIRED", "INTEGRATING"}:
@@ -960,6 +975,14 @@ class WorkflowEngine:
             evidence_count = 1 + len(self._current_fix_cycle_blockers(current))
             return bound(
                 ["CODER_TASK_PACKET", "CURRENT_BLOCKING_REMEDIATION_EVIDENCE"],
+                minimum_count=evidence_count,
+                maximum_count=evidence_count,
+                repeatable_tail=True,
+            )
+        if evidence_kind == "VERIFIED_CLOSURE_EVIDENCE":
+            evidence_count = len(self._latest_verified_evidence_bindings(current))
+            return bound(
+                ["VERIFIER_TASK_PACKET", "VERIFIER_RESULT", "VERIFICATION_RECORD"],
                 minimum_count=evidence_count,
                 maximum_count=evidence_count,
                 repeatable_tail=True,
@@ -1040,6 +1063,8 @@ class WorkflowEngine:
                 return self._validate_coder_handoff_evidence(paths, current)
             if evidence_kind == "CODER_REMEDIATION_HANDOFF":
                 return self._validate_coder_remediation_handoff_evidence(paths, current)
+            if evidence_kind == "VERIFIED_CLOSURE_EVIDENCE":
+                return self._validate_verified_closure_evidence(paths, current)
             if evidence_kind == "VERIFIER_RESULT":
                 return self._validate_verifier_transition_evidence(target, paths, current)
             if evidence_kind == "REVIEWER_RESULT":
@@ -1135,6 +1160,77 @@ class WorkflowEngine:
         current: dict[str, Any],
     ) -> None:
         snapshots = self._validate_rc_ready_closure_manifest(paths, current)
+        bound_snapshots = [
+            (binding["path"], binding["size_bytes"], binding["content_sha256"])
+            for binding in bindings
+        ]
+        if snapshots != bound_snapshots:
+            raise WorkflowEngineError("CLOSED evidence changed after binding")
+
+    def _latest_verified_evidence_bindings(
+        self,
+        current: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        latest_verified = next(
+            (
+                event
+                for event in reversed(self._trusted_audit_lineage(current))
+                if event["event_type"] == "TRANSITION_ACCEPTED"
+                and event["to_state"] == "VERIFIED"
+            ),
+            None,
+        )
+        bindings = latest_verified.get("evidence_bindings") if latest_verified else None
+        if (
+            not isinstance(bindings, list)
+            or len(bindings) < 3
+            or not all(isinstance(binding, dict) for binding in bindings)
+        ):
+            raise WorkflowEngineError(
+                "CLOSED requires the latest trusted VERIFIED audit evidence"
+            )
+        return bindings
+
+    def _validate_verified_closure_evidence(
+        self,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> list[tuple[str, int, str]]:
+        trusted_snapshots: list[tuple[str, int, str]] = []
+        for binding in self._latest_verified_evidence_bindings(current):
+            logical_path = binding.get("path")
+            size_bytes = binding.get("size_bytes")
+            content_sha256 = binding.get("content_sha256")
+            if (
+                binding.get("source") != "path"
+                or not isinstance(logical_path, str)
+                or not isinstance(size_bytes, int)
+                or isinstance(size_bytes, bool)
+                or not isinstance(content_sha256, str)
+            ):
+                raise WorkflowEngineError(
+                    "CLOSED requires valid latest trusted VERIFIED audit evidence bindings"
+                )
+            trusted_snapshots.append((logical_path, size_bytes, content_sha256))
+
+        snapshots = self._validate_verifier_transition_evidence(
+            "VERIFIED",
+            paths,
+            current,
+        )
+        if snapshots != trusted_snapshots:
+            raise WorkflowEngineError(
+                "CLOSED evidence must exactly match the latest trusted VERIFIED audit evidence"
+            )
+        return snapshots
+
+    def _revalidate_verified_closure_evidence(
+        self,
+        paths: list[Path],
+        bindings: list[dict[str, Any]],
+        current: dict[str, Any],
+    ) -> None:
+        snapshots = self._validate_verified_closure_evidence(paths, current)
         bound_snapshots = [
             (binding["path"], binding["size_bytes"], binding["content_sha256"])
             for binding in bindings

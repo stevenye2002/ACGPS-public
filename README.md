@@ -394,6 +394,15 @@ as `NOT_GRANTED`: it does not write state, create a decision, authorize release,
 or reserve a later transition. `task advance` always revalidates current state
 and evidence when an operator separately authorizes the transition.
 
+A verified task that does not require a release candidate can instead use the
+existing direct `VERIFIED -> CLOSED` policy path. Use `task gate-preview` with
+actor `CONTROLLER` and provide the exact canonical Verifier packet, Verifier
+result, and verification records already bound—at the same logical paths and in
+the same order—by the latest trusted `VERIFIED` audit event. The controller
+revalidates that complete evidence lineage after binding and immediately before
+commit. This path records completion within the authorized task scope; it does
+not create an RC or authorize publishing, deployment, tagging, or release.
+
 After a task reaches `RC_READY`, its existing release-candidate manifest is also
 the only accepted evidence for `RC_READY -> CLOSED`. Use `task gate-preview`
 with `--to-state CLOSED`, actor `CONTROLLER`, and the exact manifest previously
