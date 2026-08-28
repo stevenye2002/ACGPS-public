@@ -775,12 +775,6 @@ class WorkflowEngine:
         outcome = validate_transition_request(request)
         if not outcome.valid:
             raise WorkflowEngineError(outcome.issues[0].message)
-        if prepared["gate_source_state"] == "RC_READY" and actual_target == "CLOSED":
-            self._revalidate_rc_ready_closure_evidence(
-                prepared["evidence_items"],
-                evidence_bindings,
-                current,
-            )
         event_id = f"evt-{token}-{sequence:04d}"
         event = {
             "schema_version": 1,
@@ -822,6 +816,12 @@ class WorkflowEngine:
                 self.decisions.resolve(decision_resolution)
             except DecisionQueueError as exc:
                 raise WorkflowEngineError(str(exc)) from exc
+        if prepared["gate_source_state"] == "RC_READY" and actual_target == "CLOSED":
+            self._revalidate_rc_ready_closure_evidence(
+                prepared["evidence_items"],
+                evidence_bindings,
+                current,
+            )
         try:
             self.store.commit_task_state_and_audit(event, state)
         except WorkflowStoreError as exc:

@@ -2465,6 +2465,53 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_rc_ready_to_closed_revalidates_references_after_event_construction(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, manifest_path = prepare_rc_ready_lineage(state_root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source_path = manifest_path.parent / manifest["source_artifact"]["path"]
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_canonical_sha = engine._canonical_sha
+            source_mutated = False
+
+            def mutate_source_while_hashing_closed_event(record):
+                nonlocal source_mutated
+                digest = original_canonical_sha(record)
+                if (
+                    not source_mutated
+                    and record.get("event_type") == "TRANSITION_ACCEPTED"
+                    and record.get("to_state") == "CLOSED"
+                ):
+                    source_path.write_text(
+                        "mutated after closure event construction\n",
+                        encoding="utf-8",
+                    )
+                    source_mutated = True
+                return digest
+
+            with patch.object(
+                engine,
+                "_canonical_sha",
+                side_effect=mutate_source_while_hashing_closed_event,
+            ), self.assertRaisesRegex(WorkflowEngineError, "artifact hash mismatch: source.txt"):
+                engine.advance(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:11:00Z",
+                )
+
+            self.assertTrue(source_mutated)
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_rc_ready_gate_preview_rejects_human_gated_policy_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
