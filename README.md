@@ -36,6 +36,21 @@ python scripts/check.py full
 
 ## Supervised planner handoff preview
 
+Before choosing a workflow transition, an operator can inspect the current
+task's legal next-state options and the actor and evidence ordering already
+enforced by the controller:
+
+```powershell
+python -m acgps task next-action-preview <engine arguments> --task-id TASK_ID
+```
+
+The command opens the existing workflow store read-only and writes only its
+JSON preview to stdout. It does not evaluate transition authorization, choose a
+target, launch a model or process, or change workflow state. An option marked
+`UNSPECIFIED_EXISTING_CONTRACT` has the controller's universal one-evidence
+minimum but no more specific evidence ordering in the current contract; the
+preview does not invent one.
+
 After generating a canonical `PLANNER` task packet, an operator can validate
 and preview the handoff without launching a model or writing workflow state:
 

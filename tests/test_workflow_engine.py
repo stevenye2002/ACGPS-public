@@ -392,6 +392,79 @@ def start_recovery_generation(engine, state: dict[str, object], *, created_at_ut
 
 
 class WorkflowEngineTests(unittest.TestCase):
+    def test_next_action_preview_derives_existing_plan_ready_contract_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(writer, hour=0)
+            before = tree_bytes(state_root)
+
+            try:
+                reader = WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                )
+                preview = reader.next_action_preview("ftic-governance-1")
+            except (AttributeError, TypeError) as exc:
+                self.fail(f"read-only next-action preview is unavailable: {exc}")
+
+            self.assertEqual(preview["status"], "NEXT_ACTION_PREVIEW")
+            self.assertEqual(preview["task_id"], "ftic-governance-1")
+            self.assertEqual(preview["project_id"], "FTIC")
+            self.assertEqual(preview["current_state"], "PLAN_READY")
+            self.assertEqual(preview["authorization_status"], "NOT_EVALUATED")
+            self.assertIsNone(preview["selected_transition"])
+            self.assertEqual(
+                preview["options"],
+                [
+                    {
+                        "target_state": "IMPLEMENTING",
+                        "required_actor": "CODER",
+                        "evidence_contract": {
+                            "status": "BOUND_EXISTING_CONTRACT",
+                            "minimum_count": 1,
+                            "maximum_count": 1,
+                            "ordered_kinds": ["CODER_TASK_PACKET"],
+                            "repeatable_tail": False,
+                        },
+                    },
+                    {
+                        "target_state": "WAITING_HUMAN",
+                        "required_actor": None,
+                        "evidence_contract": {
+                            "status": "UNSPECIFIED_EXISTING_CONTRACT",
+                            "minimum_count": 1,
+                            "maximum_count": None,
+                            "ordered_kinds": [],
+                            "repeatable_tail": False,
+                        },
+                    },
+                    {
+                        "target_state": "ABANDONED",
+                        "required_actor": None,
+                        "evidence_contract": {
+                            "status": "UNSPECIFIED_EXISTING_CONTRACT",
+                            "minimum_count": 1,
+                            "maximum_count": None,
+                            "ordered_kinds": [],
+                            "repeatable_tail": False,
+                        },
+                    },
+                ],
+            )
+            self.assertEqual(preview["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
+            with self.assertRaisesRegex(WorkflowEngineError, "read-only workflow engine"):
+                reader.intake(valid_intake())
+            self.assertEqual(tree_bytes(state_root), before)
+
     def test_planning_gates_require_planner_actor_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

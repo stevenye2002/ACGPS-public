@@ -377,6 +377,37 @@ class MVPCLITests(unittest.TestCase):
             "ftic-v1",
         ]
 
+    def test_cli_previews_task_next_actions_without_state_writes(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        engine.intake(valid_intake())
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "task",
+            "next-action-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(result["status"], "NEXT_ACTION_PREVIEW")
+        self.assertEqual(result["current_state"], "DRAFT")
+        self.assertEqual(result["authorization_status"], "NOT_EVALUATED")
+        self.assertEqual(
+            [option["target_state"] for option in result["options"]],
+            ["READY_FOR_CLASSIFICATION", "ABANDONED"],
+        )
+        self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_initializes_and_reads_bounded_coding_gate(self) -> None:
         initialized = self._run(
             "coding",

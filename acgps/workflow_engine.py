@@ -42,11 +42,14 @@ class WorkflowEngine:
         state_root: Path,
         project_root: Path,
         profile_id: str,
+        *,
+        read_only: bool = False,
     ):
         self.policy_root = Path(policy_root)
         self.state_root = Path(state_root)
         self.project_root = Path(project_root)
         self.profile_id = profile_id
+        self.read_only = read_only
         try:
             self.bundle = load_policy_bundle(self.policy_root)
             profile_record = self.bundle.project_profiles.get(profile_id)
@@ -60,10 +63,15 @@ class WorkflowEngine:
         state_resolved = self.state_root.resolve(strict=False)
         if state_resolved == project_resolved or state_resolved.is_relative_to(project_resolved):
             raise WorkflowEngineError("state_root must remain outside the managed project root")
-        self.store = WorkflowStore(self.state_root)
-        self.decisions = DecisionQueue(self.state_root / "decisions", workflow_store=self.store)
+        self.store = WorkflowStore(self.state_root, read_only=read_only)
+        self.decisions = DecisionQueue(
+            self.state_root / "decisions",
+            workflow_store=self.store,
+            create_root=not read_only,
+        )
 
     def intake(self, intake: dict[str, Any], *, actor: str = "PLANNER") -> dict[str, Any]:
+        self._require_writable()
         try:
             validate_contract("task_intake", intake, mode="runtime")
         except ContractValidationError as exc:
@@ -164,6 +172,45 @@ class WorkflowEngine:
         except WorkflowStoreError as exc:
             raise WorkflowEngineError(str(exc)) from exc
 
+    def next_action_preview(self, task_id: str) -> dict[str, Any]:
+        current = self.status(task_id)
+        self._trusted_audit_lineage(current)
+        legal_transitions = list(
+            self.bundle.workflow["transitions"].get(current["current_state"], [])
+        )
+        return {
+            "status": "NEXT_ACTION_PREVIEW",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "pending_decision_id": current["pending_decision_id"],
+            "authorization_status": "NOT_EVALUATED",
+            "selected_transition": None,
+            "options": [
+                {
+                    "target_state": target,
+                    "required_actor": self._required_transition_actor(
+                        current["current_state"],
+                        target,
+                    ),
+                    "evidence_contract": self._preview_evidence_contract(
+                        current["current_state"],
+                        target,
+                    ),
+                }
+                for target in legal_transitions
+            ],
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def advance(
         self,
         task_id: str,
@@ -177,6 +224,7 @@ class WorkflowEngine:
         task_attributes: dict[str, str] | None = None,
         decision_resolution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self._require_writable()
         current = self.status(task_id)
         events = self.audit(task_id)
         sequence = len(events) + 1
@@ -206,19 +254,10 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 f"transition {current['current_state']} -> {actual_target} is not policy-authorized"
             )
-        required_actor = {
-            ("CLASSIFIED", "SPEC_READY"): "PLANNER",
-            ("SPEC_READY", "PLAN_READY"): "PLANNER",
-            ("PLAN_READY", "IMPLEMENTING"): "CODER",
-            ("FIX_REQUIRED", "IMPLEMENTING"): "CODER",
-            ("INTEGRATING", "FIX_REQUIRED"): "VERIFIER",
-        }.get((current["current_state"], actual_target)) or {
-            "FIX_REQUIRED": "REVIEWER",
-            "INTEGRATING": "REVIEWER",
-            "TASK_REVIEW": "CODER",
-            "VERIFIED": "VERIFIER",
-            "RC_READY": "VERIFIER",
-        }.get(actual_target)
+        required_actor = self._required_transition_actor(
+            current["current_state"],
+            actual_target,
+        )
         if required_actor is not None and actor != required_actor:
             raise WorkflowEngineError(f"{actual_target} requires actor {required_actor}")
         evidence_items = [Path(path) for path in evidence_paths]
@@ -384,6 +423,138 @@ class WorkflowEngine:
             raise WorkflowEngineError(str(exc)) from exc
         return self.status(task_id)
 
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise WorkflowEngineError("read-only workflow engine cannot modify state")
+
+    @staticmethod
+    def _required_transition_actor(from_state: str, target: str) -> str | None:
+        return {
+            ("CLASSIFIED", "SPEC_READY"): "PLANNER",
+            ("SPEC_READY", "PLAN_READY"): "PLANNER",
+            ("PLAN_READY", "IMPLEMENTING"): "CODER",
+            ("FIX_REQUIRED", "IMPLEMENTING"): "CODER",
+            ("INTEGRATING", "FIX_REQUIRED"): "VERIFIER",
+        }.get((from_state, target)) or {
+            "FIX_REQUIRED": "REVIEWER",
+            "INTEGRATING": "REVIEWER",
+            "TASK_REVIEW": "CODER",
+            "VERIFIED": "VERIFIER",
+            "RC_READY": "VERIFIER",
+        }.get(target)
+
+    @staticmethod
+    def _gate_evidence_kind(from_state: str, target: str) -> str:
+        if (from_state, target) in {
+            ("CLASSIFIED", "SPEC_READY"),
+            ("SPEC_READY", "PLAN_READY"),
+        }:
+            return "PLANNER_RESULT"
+        if (from_state, target) == ("PLAN_READY", "IMPLEMENTING"):
+            return "CODER_HANDOFF"
+        if (from_state, target) == ("FIX_REQUIRED", "IMPLEMENTING"):
+            return "CODER_REMEDIATION_HANDOFF"
+        if (from_state, target) == ("INTEGRATING", "FIX_REQUIRED"):
+            return "VERIFIER_RESULT"
+        if from_state == "TASK_REVIEW" and target in {"FIX_REQUIRED", "INTEGRATING"}:
+            return "REVIEWER_RESULT"
+        if target == "FIX_REQUIRED":
+            return "FIX_REQUIRED_FINDINGS"
+        if target == "INTEGRATING":
+            return "INTEGRATING_FINDINGS"
+        if target == "TASK_REVIEW":
+            return "CODER_RESULT"
+        if target == "VERIFIED":
+            return "VERIFIER_RESULT"
+        if target == "RC_READY":
+            return "RELEASE_CANDIDATE_MANIFEST"
+        return "GENERIC_EVIDENCE"
+
+    @classmethod
+    def _preview_evidence_contract(cls, from_state: str, target: str) -> dict[str, Any]:
+        def bound(
+            ordered_kinds: list[str],
+            *,
+            minimum_count: int,
+            maximum_count: int | None,
+            repeatable_tail: bool = False,
+        ) -> dict[str, Any]:
+            return {
+                "status": "BOUND_EXISTING_CONTRACT",
+                "minimum_count": minimum_count,
+                "maximum_count": maximum_count,
+                "ordered_kinds": ordered_kinds,
+                "repeatable_tail": repeatable_tail,
+            }
+
+        evidence_kind = cls._gate_evidence_kind(from_state, target)
+        if evidence_kind == "PLANNER_RESULT":
+            return bound(
+                ["PLANNER_TASK_PACKET", "PLANNER_RESULT"],
+                minimum_count=2,
+                maximum_count=2,
+            )
+        if evidence_kind == "CODER_HANDOFF":
+            return bound(
+                ["CODER_TASK_PACKET"],
+                minimum_count=1,
+                maximum_count=1,
+            )
+        if evidence_kind == "CODER_REMEDIATION_HANDOFF":
+            return bound(
+                ["CODER_TASK_PACKET", "CURRENT_BLOCKING_REMEDIATION_EVIDENCE"],
+                minimum_count=2,
+                maximum_count=None,
+                repeatable_tail=True,
+            )
+        if evidence_kind == "VERIFIER_RESULT":
+            return bound(
+                ["VERIFIER_TASK_PACKET", "VERIFIER_RESULT", "VERIFICATION_RECORD"],
+                minimum_count=3,
+                maximum_count=None,
+                repeatable_tail=True,
+            )
+        if evidence_kind == "REVIEWER_RESULT":
+            return bound(
+                ["REVIEWER_TASK_PACKET", "REVIEWER_RESULT", "REVIEW_FINDING"],
+                minimum_count=3,
+                maximum_count=None,
+                repeatable_tail=True,
+            )
+        if evidence_kind == "FIX_REQUIRED_FINDINGS":
+            return bound(
+                ["REVIEW_FINDING"],
+                minimum_count=1,
+                maximum_count=None,
+                repeatable_tail=True,
+            )
+        if evidence_kind == "INTEGRATING_FINDINGS":
+            return bound(
+                ["REVIEW_FINDING"],
+                minimum_count=1,
+                maximum_count=None,
+                repeatable_tail=True,
+            )
+        if evidence_kind == "CODER_RESULT":
+            return bound(
+                ["CODER_TASK_PACKET", "CODER_RESULT"],
+                minimum_count=2,
+                maximum_count=2,
+            )
+        if evidence_kind == "RELEASE_CANDIDATE_MANIFEST":
+            return bound(
+                ["RELEASE_CANDIDATE_MANIFEST"],
+                minimum_count=1,
+                maximum_count=1,
+            )
+        return {
+            "status": "UNSPECIFIED_EXISTING_CONTRACT",
+            "minimum_count": 1,
+            "maximum_count": None,
+            "ordered_kinds": [],
+            "repeatable_tail": False,
+        }
+
     def _validate_gate_evidence(
         self,
         target: str,
@@ -391,25 +562,20 @@ class WorkflowEngine:
         current: dict[str, Any],
     ) -> list[tuple[str, int, str]] | None:
         try:
-            if (current["current_state"], target) in {
-                ("CLASSIFIED", "SPEC_READY"),
-                ("SPEC_READY", "PLAN_READY"),
-            }:
+            evidence_kind = self._gate_evidence_kind(current["current_state"], target)
+            if evidence_kind == "PLANNER_RESULT":
                 return self._validate_planner_transition_evidence(target, paths, current)
-            if (current["current_state"], target) == ("PLAN_READY", "IMPLEMENTING"):
+            if evidence_kind == "CODER_HANDOFF":
                 return self._validate_coder_handoff_evidence(paths, current)
-            if (current["current_state"], target) == ("FIX_REQUIRED", "IMPLEMENTING"):
+            if evidence_kind == "CODER_REMEDIATION_HANDOFF":
                 return self._validate_coder_remediation_handoff_evidence(paths, current)
-            if (current["current_state"], target) == ("INTEGRATING", "FIX_REQUIRED"):
+            if evidence_kind == "VERIFIER_RESULT":
                 return self._validate_verifier_transition_evidence(target, paths, current)
-            if (
-                current["current_state"] == "TASK_REVIEW"
-                and target in {"FIX_REQUIRED", "INTEGRATING"}
-            ):
+            if evidence_kind == "REVIEWER_RESULT":
                 return self._validate_reviewer_transition_evidence(target, paths, current)
-            if target == "FIX_REQUIRED":
+            if evidence_kind == "FIX_REQUIRED_FINDINGS":
                 validate_fix_required_findings(paths)
-            elif target == "INTEGRATING":
+            elif evidence_kind == "INTEGRATING_FINDINGS":
                 records = validate_review_findings(paths)
                 required_ids = self._current_fix_cycle_blocker_ids(current)
                 closed_ids = {
@@ -422,11 +588,9 @@ class WorkflowEngine:
                     raise WorkflowEngineError(
                         "INTEGRATING requires closed review evidence for: " + ", ".join(missing_ids)
                     )
-            elif target == "TASK_REVIEW":
+            elif evidence_kind == "CODER_RESULT":
                 return self._validate_task_review_evidence(paths, current)
-            elif target == "VERIFIED":
-                return self._validate_verifier_transition_evidence(target, paths, current)
-            elif target == "RC_READY":
+            elif evidence_kind == "RELEASE_CANDIDATE_MANIFEST":
                 if len(paths) != 1:
                     raise WorkflowEngineError(
                         "RC_READY requires exactly one release-candidate manifest"
