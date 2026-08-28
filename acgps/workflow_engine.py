@@ -238,6 +238,15 @@ class WorkflowEngine:
                 raise WorkflowEngineError(f"{actual_target} evidence changed after validation")
         if actual_target == "RC_READY":
             bound_manifest, _ = self._read_bound_evidence_json_snapshot(evidence_bindings[0])
+            try:
+                validate_release_candidate_manifest(
+                    bound_manifest,
+                    evidence_items[0],
+                    expected_project_id=current["project_id"],
+                    expected_task_id=current["task_id"],
+                )
+            except ReviewEvidenceError as exc:
+                raise WorkflowEngineError(str(exc)) from exc
             self._validate_rc_verification_lineage(bound_manifest, evidence_items[0], current)
 
         decision_binding = None

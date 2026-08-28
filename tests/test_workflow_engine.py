@@ -1480,6 +1480,72 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_rc_ready_revalidates_nonverification_references_after_manifest_binding(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        cases = (
+            ("source artifact", "artifact hash mismatch"),
+            ("review closure", "blocking review finding remains open"),
+            ("rollback path", "required evidence file is missing"),
+        )
+        for case_name, expected_error in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                engine, review_path, verification_paths = prepare_verified_rc_lineage(
+                    state_root,
+                    ["verification-current"],
+                )
+                manifest_path = build_test_release_candidate_manifest(
+                    engine,
+                    review_path=review_path,
+                    verification_paths=verification_paths,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                source_path = manifest_path.parent / manifest["source_artifact"]["path"]
+                rollback_path = manifest_path.parent / manifest["rollback_plan_path"]
+                before_state = engine.status("ftic-governance-1")
+                before_audit = engine.audit("ftic-governance-1")
+                original_binding = engine._path_evidence_binding
+
+                def mutate_reference_after_binding(path, *args):
+                    binding = original_binding(path, *args)
+                    if Path(path) == manifest_path:
+                        if case_name == "source artifact":
+                            source_path.write_text(
+                                "mutated governance source\n",
+                                encoding="utf-8",
+                            )
+                        elif case_name == "review closure":
+                            review_record = json.loads(
+                                review_path.read_text(encoding="utf-8")
+                            )
+                            review_record["status"] = "OPEN"
+                            review_record["disposition"] = "ACCEPTED"
+                            review_path.write_bytes(
+                                canonical_json_bytes(review_record) + b"\n"
+                            )
+                        else:
+                            rollback_path.unlink()
+                    return binding
+
+                with patch.object(
+                    engine,
+                    "_path_evidence_binding",
+                    side_effect=mutate_reference_after_binding,
+                ), self.assertRaisesRegex(WorkflowEngineError, expected_error):
+                    engine.advance(
+                        "ftic-governance-1",
+                        "RC_READY",
+                        actor="VERIFIER",
+                        evidence_paths=[manifest_path],
+                        created_at_utc="2026-08-23T01:10:00Z",
+                    )
+
+                self.assertEqual(engine.status("ftic-governance-1"), before_state)
+                self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_rc_ready_rejects_valid_verification_outside_latest_verified_event(self) -> None:
         from acgps.workflow_engine import WorkflowEngineError
 
