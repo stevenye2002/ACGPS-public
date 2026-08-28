@@ -229,6 +229,30 @@ def advance_to_plan_ready(engine, *, hour: int) -> Path:
     return evidence
 
 
+def advance_to_waiting_human(engine, *, hour: int) -> dict[str, object]:
+    engine.intake(valid_intake())
+    evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+    for minute, target in enumerate(
+        ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+        start=1,
+    ):
+        engine.advance(
+            "ftic-governance-1",
+            target,
+            actor="CONTROLLER",
+            evidence_paths=[evidence],
+            created_at_utc=f"2026-08-27T{hour:02d}:0{minute}:00Z",
+        )
+    return engine.advance(
+        "ftic-governance-1",
+        "SPEC_READY",
+        actor="CONTROLLER",
+        evidence_paths=[evidence],
+        human_triggers=["H1_PRODUCT_INTENT"],
+        created_at_utc=f"2026-08-27T{hour:02d}:03:00Z",
+    )
+
+
 def advance_to_task_review(engine, *, hour: int) -> Path:
     evidence = advance_to_implementing(engine, hour=hour)
     engine.advance(
@@ -463,6 +487,115 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
             with self.assertRaisesRegex(WorkflowEngineError, "read-only workflow engine"):
                 reader.intake(valid_intake())
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_next_action_preview_binds_pending_decision_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            before = tree_bytes(state_root)
+
+            preview = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).next_action_preview("ftic-governance-1")
+
+            self.assertEqual(preview["current_state"], "WAITING_HUMAN")
+            self.assertEqual(
+                preview["pending_decision_requirement"],
+                {
+                    "decision_id": waiting["pending_decision_id"],
+                    "status": "PENDING",
+                    "required_resume_state": "SPEC_READY",
+                    "allowed_option_ids": ["RESUME"],
+                    "default_without_response": "PAUSE",
+                    "resolution_required": True,
+                },
+            )
+            self.assertEqual(
+                preview["options"],
+                [
+                    {
+                        "target_state": "SPEC_READY",
+                        "required_actor": None,
+                        "evidence_contract": {
+                            "status": "UNSPECIFIED_EXISTING_CONTRACT",
+                            "minimum_count": 1,
+                            "maximum_count": None,
+                            "ordered_kinds": [],
+                            "repeatable_tail": False,
+                        },
+                    }
+                ],
+            )
+            self.assertIsNone(preview["selected_transition"])
+            self.assertEqual(preview["authorization_status"], "NOT_EVALUATED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_next_action_preview_rejects_illegal_pending_target(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=8)
+            pending_path = writer.decisions.pending_path(waiting["pending_decision_id"])
+            pending = json.loads(pending_path.read_text(encoding="utf-8"))
+            pending_path.write_bytes(canonical_json_bytes(dict(pending, stage="DRAFT")) + b"\n")
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "pending decision target DRAFT is not legal from WAITING_HUMAN",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).next_action_preview("ftic-governance-1")
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_next_action_preview_rejects_foreign_pending_project(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=10)
+            pending_path = writer.decisions.pending_path(waiting["pending_decision_id"])
+            pending = json.loads(pending_path.read_text(encoding="utf-8"))
+            pending_path.write_bytes(
+                canonical_json_bytes(dict(pending, project_id="OTHER")) + b"\n"
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "pending decision project does not match WAITING_HUMAN state",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).next_action_preview("ftic-governance-1")
+
             self.assertEqual(tree_bytes(state_root), before)
 
     def test_next_action_preview_derives_multi_blocker_evidence_counts_from_audit(

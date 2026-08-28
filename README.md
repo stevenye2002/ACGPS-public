@@ -51,6 +51,14 @@ target, launch a model or process, or change workflow state. An option marked
 minimum but no more specific evidence ordering in the current contract; the
 preview does not invent one.
 
+When the task is in `WAITING_HUMAN`, the preview validates the authoritative
+pending-decision queue and reports only the request's approved target `stage`.
+The `pending_decision_requirement` field identifies the matching decision,
+allowed option IDs, required resume state, and pause-by-default behavior. It is
+not a resolution or transition authorization. Missing, foreign, duplicate, or
+workflow-inapplicable pending-decision records fail closed without changing
+state.
+
 After generating a canonical `PLANNER` task packet, an operator can validate
 and preview the handoff without launching a model or writing workflow state:
 

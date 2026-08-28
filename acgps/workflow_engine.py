@@ -178,6 +178,15 @@ class WorkflowEngine:
         legal_transitions = list(
             self.bundle.workflow["transitions"].get(current["current_state"], [])
         )
+        pending_decision_requirement = None
+        if current["current_state"] == "WAITING_HUMAN":
+            pending_decision_requirement = self._pending_decision_requirement(
+                current,
+                legal_transitions,
+            )
+            legal_transitions = [
+                pending_decision_requirement["required_resume_state"]
+            ]
         return {
             "status": "NEXT_ACTION_PREVIEW",
             "task_id": current["task_id"],
@@ -187,6 +196,7 @@ class WorkflowEngine:
             "audit_head_event_id": current["audit_head_event_id"],
             "audit_head_hash": current["audit_head_hash"],
             "pending_decision_id": current["pending_decision_id"],
+            "pending_decision_requirement": pending_decision_requirement,
             "authorization_status": "NOT_EVALUATED",
             "selected_transition": None,
             "options": [
@@ -209,6 +219,43 @@ class WorkflowEngine:
                 "state_write": "NOT_PERFORMED",
                 "workflow_transition": "NOT_PERFORMED",
             },
+        }
+
+    def _pending_decision_requirement(
+        self,
+        current: dict[str, Any],
+        legal_transitions: list[str],
+    ) -> dict[str, Any]:
+        try:
+            pending_records = self.decisions.list_pending()
+        except DecisionQueueError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        matches = [
+            record
+            for record in pending_records
+            if record["task_id"] == current["task_id"]
+        ]
+        if len(matches) != 1:
+            raise WorkflowEngineError(
+                "WAITING_HUMAN requires exactly one matching pending decision"
+            )
+        request = matches[0]
+        if request["project_id"] != current["project_id"]:
+            raise WorkflowEngineError(
+                "pending decision project does not match WAITING_HUMAN state"
+            )
+        target = request["stage"]
+        if target not in legal_transitions:
+            raise WorkflowEngineError(
+                f"pending decision target {target} is not legal from WAITING_HUMAN"
+            )
+        return {
+            "decision_id": request["decision_id"],
+            "status": request["status"],
+            "required_resume_state": target,
+            "allowed_option_ids": [option["id"] for option in request["options"]],
+            "default_without_response": request["default_without_response"],
+            "resolution_required": True,
         }
 
     def advance(

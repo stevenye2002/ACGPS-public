@@ -408,6 +408,75 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_binds_waiting_human_next_action_to_pending_decision(self) -> None:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            self._run(
+                "task",
+                "advance",
+                *self._engine_arguments(),
+                "--task-id",
+                "ftic-governance-1",
+                "--to-state",
+                target,
+                "--actor",
+                "CONTROLLER",
+                "--created-at-utc",
+                f"2026-08-27T09:0{index}:00Z",
+                "--evidence",
+                str(evidence),
+            )
+        waiting = self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "SPEC_READY",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-27T09:03:00Z",
+            "--evidence",
+            str(evidence),
+            "--human-trigger",
+            "H1_PRODUCT_INTENT",
+        )
+        before = self._state_root_identity(self.state_root)
+
+        preview = self._run(
+            "task",
+            "next-action-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(
+            preview["pending_decision_requirement"],
+            {
+                "decision_id": waiting["pending_decision_id"],
+                "status": "PENDING",
+                "required_resume_state": "SPEC_READY",
+                "allowed_option_ids": ["RESUME"],
+                "default_without_response": "PAUSE",
+                "resolution_required": True,
+            },
+        )
+        self.assertEqual(
+            [option["target_state"] for option in preview["options"]],
+            ["SPEC_READY"],
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_initializes_and_reads_bounded_coding_gate(self) -> None:
         initialized = self._run(
             "coding",
