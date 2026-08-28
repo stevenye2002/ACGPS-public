@@ -270,6 +270,10 @@ class WorkflowEngine:
         human_triggers: Iterable[str] = (),
         task_attributes: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        if to_state == "WAITING_HUMAN":
+            raise WorkflowEngineError(
+                "direct transition gate preview does not accept WAITING_HUMAN as a target"
+            )
         current = self.status(task_id)
         if current["current_state"] == "WAITING_HUMAN":
             raise WorkflowEngineError(

@@ -1852,6 +1852,41 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_direct_transition_gate_preview_rejects_explicit_waiting_human_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(writer, hour=5)
+            packet_path = write_coder_handoff_evidence(writer)
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            for human_triggers in ([], ["H1_PRODUCT_INTENT"]):
+                with self.subTest(human_triggers=human_triggers):
+                    with self.assertRaisesRegex(
+                        WorkflowEngineError,
+                        "direct transition gate preview does not accept WAITING_HUMAN as a target",
+                    ):
+                        reader.direct_transition_gate_preview(
+                            "ftic-governance-1",
+                            "WAITING_HUMAN",
+                            actor="CODER",
+                            evidence_paths=[packet_path],
+                            created_at_utc="2026-08-23T05:10:00Z",
+                            human_triggers=human_triggers,
+                        )
+                    self.assertEqual(tree_bytes(state_root), before)
+
     def test_direct_transition_gate_preview_rejects_waiting_human_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

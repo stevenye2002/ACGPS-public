@@ -693,6 +693,35 @@ class MVPCLITests(unittest.TestCase):
         self.assertIn("cannot create a WAITING_HUMAN decision", rejected["error"])
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+        for label, extra_arguments in (
+            ("ordinary", ()),
+            ("human-gated", ("--human-trigger", "H1_PRODUCT_INTENT")),
+        ):
+            with self.subTest(explicit_waiting_human=label):
+                explicit_waiting = self._run(
+                    "task",
+                    "gate-preview",
+                    *self._engine_arguments(),
+                    "--task-id",
+                    "ftic-governance-1",
+                    "--to-state",
+                    "WAITING_HUMAN",
+                    "--actor",
+                    "CODER",
+                    "--created-at-utc",
+                    "2026-08-28T04:07:00Z",
+                    "--evidence",
+                    str(coder_packet_path),
+                    *extra_arguments,
+                    expected_exit=2,
+                )
+                self.assertEqual(explicit_waiting["status"], "REJECTED")
+                self.assertIn(
+                    "does not accept WAITING_HUMAN as a target",
+                    explicit_waiting["error"],
+                )
+                self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_binds_waiting_human_next_action_to_pending_decision(self) -> None:
         self._run(
             "task",
