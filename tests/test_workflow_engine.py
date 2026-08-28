@@ -1432,6 +1432,54 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(engine.status("ftic-governance-1"), before_state)
             self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
+    def test_rc_ready_rejects_referenced_verification_changed_after_manifest_binding(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                engine,
+                review_path=review_path,
+                verification_paths=verification_paths,
+            )
+            replacement_payload = canonical_json_bytes(
+                dict(
+                    valid_verification_record(),
+                    verification_id="verification-replaced-after-binding",
+                )
+            ) + b"\n"
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def replace_reference_after_binding(path, *args):
+                binding = original_binding(path, *args)
+                if Path(path) == manifest_path:
+                    verification_paths[0].write_bytes(replacement_payload)
+                return binding
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=replace_reference_after_binding,
+            ), self.assertRaises(WorkflowEngineError):
+                engine.advance(
+                    "ftic-governance-1",
+                    "RC_READY",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:10:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
     def test_rc_ready_rejects_valid_verification_outside_latest_verified_event(self) -> None:
         from acgps.workflow_engine import WorkflowEngineError
 

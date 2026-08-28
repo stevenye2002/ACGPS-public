@@ -236,6 +236,9 @@ class WorkflowEngine:
             ]
             if bound_evidence != validated_evidence:
                 raise WorkflowEngineError(f"{actual_target} evidence changed after validation")
+        if actual_target == "RC_READY":
+            bound_manifest, _ = self._read_bound_evidence_json_snapshot(evidence_bindings[0])
+            self._validate_rc_verification_lineage(bound_manifest, evidence_items[0], current)
 
         decision_binding = None
         pending_decision_id = None
