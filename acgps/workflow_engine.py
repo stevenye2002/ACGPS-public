@@ -209,6 +209,7 @@ class WorkflowEngine:
     def next_action_preview(self, task_id: str) -> dict[str, Any]:
         current = self.status(task_id)
         self._trusted_audit_lineage(current)
+        gate_source_state = self._transition_gate_source_state(current)
         legal_transitions = list(
             self.bundle.workflow["transitions"].get(current["current_state"], [])
         )
@@ -237,12 +238,13 @@ class WorkflowEngine:
                 {
                     "target_state": target,
                     "required_actor": self._required_transition_actor(
-                        current["current_state"],
+                        gate_source_state,
                         target,
                     ),
                     "evidence_contract": self._preview_evidence_contract(
                         current,
                         target,
+                        source_state=gate_source_state,
                     ),
                 }
                 for target in legal_transitions
@@ -283,6 +285,11 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 f"pending decision target {target} is not legal from WAITING_HUMAN"
             )
+        source_state = self._transition_gate_source_state(current)
+        if target not in self.bundle.workflow["transitions"].get(source_state, []):
+            raise WorkflowEngineError(
+                f"pending decision target {target} is not legal from original state {source_state}"
+            )
         return {
             "decision_id": request["decision_id"],
             "status": request["status"],
@@ -290,6 +297,156 @@ class WorkflowEngine:
             "allowed_option_ids": [option["id"] for option in request["options"]],
             "default_without_response": request["default_without_response"],
             "resolution_required": True,
+        }
+
+    def _waiting_human_resolution_binding(
+        self,
+        current: dict[str, Any],
+        *,
+        to_state: str,
+        decision_resolution: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if current["current_state"] != "WAITING_HUMAN":
+            raise WorkflowEngineError(
+                "resume gate preview requires current state WAITING_HUMAN"
+            )
+        if (
+            decision_resolution is None
+            or decision_resolution.get("decision_id") != current["pending_decision_id"]
+        ):
+            raise WorkflowEngineError("WAITING_HUMAN requires its matching decision resolution")
+        try:
+            request = self.decisions.validate_resolution(decision_resolution)
+            pending_records = self.decisions.list_pending()
+        except DecisionQueueError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            request["project_id"] != current["project_id"]
+            or request["task_id"] != current["task_id"]
+        ):
+            raise WorkflowEngineError(
+                "pending decision identity does not match WAITING_HUMAN state"
+            )
+        authoritative_matches = [
+            record
+            for record in pending_records
+            if record["decision_id"] == request["decision_id"]
+        ]
+        if len(authoritative_matches) != 1 or authoritative_matches[0] != request:
+            raise WorkflowEngineError(
+                "resolution request does not match the authoritative pending decision"
+            )
+        if request["stage"] != to_state or decision_resolution["resume_state"] != to_state:
+            raise WorkflowEngineError(
+                "decision resolution does not authorize the requested resume state"
+            )
+        source_state = self._transition_gate_source_state(current)
+        if to_state not in self.bundle.workflow["transitions"].get(source_state, []):
+            raise WorkflowEngineError(
+                f"resume target {to_state} is not legal from original state {source_state}"
+            )
+        return request, {
+            "schema_version": 1,
+            "decision_id": decision_resolution["decision_id"],
+            "project_id": decision_resolution["project_id"],
+            "task_id": decision_resolution["task_id"],
+            "status": decision_resolution["status"],
+            "authorized_target_state": decision_resolution["resume_state"],
+            "source": "embedded",
+            "path": None,
+            "embedded_record": decision_resolution,
+            "resolution_sha256": self._canonical_sha(decision_resolution),
+            "resolved_at_utc": decision_resolution["resolved_at_utc"],
+        }
+
+    def waiting_human_resume_gate_preview(
+        self,
+        task_id: str,
+        *,
+        to_state: str,
+        actor: str,
+        evidence_paths: Iterable[Path],
+        decision_resolution: dict[str, Any],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        pending_request, decision_binding = self._waiting_human_resolution_binding(
+            current,
+            to_state=to_state,
+            decision_resolution=decision_resolution,
+        )
+        pending_request_identity = self._canonical_sha(pending_request)
+        prepared = self._prepare_transition_validation(
+            task_id,
+            to_state,
+            actor=actor,
+            evidence_paths=evidence_paths,
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        if prepared["current"] != current or self.status(task_id) != current:
+            raise WorkflowEngineError(
+                "task state identity changed during resume gate preview"
+            )
+        if prepared["actual_target"] != to_state:
+            raise WorkflowEngineError(
+                "resume gate preview cannot create another WAITING_HUMAN decision"
+            )
+        if self._canonical_sha(self._trusted_audit_lineage(current)) != trusted_lineage_identity:
+            raise WorkflowEngineError(
+                "audit lineage identity changed during resume gate preview"
+            )
+        final_request, final_decision_binding = self._waiting_human_resolution_binding(
+            current,
+            to_state=to_state,
+            decision_resolution=decision_resolution,
+        )
+        if (
+            self._canonical_sha(final_request) != pending_request_identity
+            or final_decision_binding != decision_binding
+        ):
+            raise WorkflowEngineError(
+                "pending decision identity changed during resume gate preview"
+            )
+        return {
+            "status": "WAITING_HUMAN_RESUME_GATE_PREVIEW",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "source_state_before_human_gate": prepared["gate_source_state"],
+            "target_state": to_state,
+            "required_actor": self._required_transition_actor(
+                prepared["gate_source_state"],
+                to_state,
+            ),
+            "decision_id": decision_binding["decision_id"],
+            "resolution_sha256": decision_binding["resolution_sha256"],
+            "pending_decision_sha256": pending_request_identity,
+            "resolution_status": "VALIDATED",
+            "evidence_status": "VALIDATED",
+            "evidence_bindings": prepared["evidence_bindings"],
+            "policy_evaluation_id": prepared["evaluation_id"],
+            "policy_bundle_digest": prepared["policy_result"]["policy_bundle_digest"],
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "pending_decision_identity_status": "UNCHANGED_DURING_QUERY",
+            "authorization_status": "NOT_GRANTED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
         }
 
     def direct_transition_gate_preview(
@@ -418,6 +575,7 @@ class WorkflowEngine:
         task_attributes: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         current = self.status(task_id)
+        gate_source_state = self._transition_gate_source_state(current)
         events = self.audit(task_id)
         sequence = len(events) + 1
         token = self._task_token(task_id)
@@ -447,7 +605,7 @@ class WorkflowEngine:
                 f"transition {current['current_state']} -> {actual_target} is not policy-authorized"
             )
         required_actor = self._required_transition_actor(
-            current["current_state"],
+            gate_source_state,
             actual_target,
         )
         if required_actor is not None and actor != required_actor:
@@ -455,7 +613,12 @@ class WorkflowEngine:
         evidence_items = [Path(path) for path in evidence_paths]
         if not evidence_items:
             raise WorkflowEngineError("every accepted transition requires evidence")
-        validated_evidence = self._validate_gate_evidence(actual_target, evidence_items, current)
+        validated_evidence = self._validate_gate_evidence(
+            actual_target,
+            evidence_items,
+            current,
+            source_state=gate_source_state,
+        )
         evidence_bindings = [
             self._path_evidence_binding(path, token, sequence, index, actual_target, created_at_utc)
             for index, path in enumerate(evidence_items, start=1)
@@ -481,6 +644,7 @@ class WorkflowEngine:
             self._validate_rc_verification_lineage(bound_manifest, evidence_items[0], current)
         return {
             "current": current,
+            "gate_source_state": gate_source_state,
             "sequence": sequence,
             "token": token,
             "evaluation_id": evaluation_id,
@@ -560,25 +724,11 @@ class WorkflowEngine:
                 }
             )
         elif current["current_state"] == "WAITING_HUMAN":
-            if decision_resolution is None or decision_resolution.get("decision_id") != current["pending_decision_id"]:
-                raise WorkflowEngineError("WAITING_HUMAN requires its matching decision resolution")
-            try:
-                self.decisions.validate_resolution(decision_resolution)
-            except DecisionQueueError as exc:
-                raise WorkflowEngineError(str(exc)) from exc
-            decision_binding = {
-                "schema_version": 1,
-                "decision_id": decision_resolution["decision_id"],
-                "project_id": decision_resolution["project_id"],
-                "task_id": decision_resolution["task_id"],
-                "status": decision_resolution["status"],
-                "authorized_target_state": decision_resolution["resume_state"],
-                "source": "embedded",
-                "path": None,
-                "embedded_record": decision_resolution,
-                "resolution_sha256": self._canonical_sha(decision_resolution),
-                "resolved_at_utc": decision_resolution["resolved_at_utc"],
-            }
+            _, decision_binding = self._waiting_human_resolution_binding(
+                current,
+                to_state=actual_target,
+                decision_resolution=decision_resolution,
+            )
         elif decision_resolution is not None:
             raise WorkflowEngineError("decision resolution is only valid when resuming WAITING_HUMAN")
 
@@ -664,6 +814,18 @@ class WorkflowEngine:
             raise WorkflowEngineError("read-only workflow engine cannot modify state")
 
     @staticmethod
+    def _transition_gate_source_state(current: dict[str, Any]) -> str:
+        source_state = current["current_state"]
+        if source_state != "WAITING_HUMAN":
+            return source_state
+        source_state = current.get("previous_state")
+        if not isinstance(source_state, str) or source_state == "WAITING_HUMAN":
+            raise WorkflowEngineError(
+                "WAITING_HUMAN state requires a valid original source state"
+            )
+        return source_state
+
+    @staticmethod
     def _required_transition_actor(from_state: str, target: str) -> str | None:
         return {
             ("CLASSIFIED", "SPEC_READY"): "PLANNER",
@@ -710,6 +872,8 @@ class WorkflowEngine:
         self,
         current: dict[str, Any],
         target: str,
+        *,
+        source_state: str | None = None,
     ) -> dict[str, Any]:
         def bound(
             ordered_kinds: list[str],
@@ -726,7 +890,10 @@ class WorkflowEngine:
                 "repeatable_tail": repeatable_tail,
             }
 
-        evidence_kind = self._gate_evidence_kind(current["current_state"], target)
+        evidence_kind = self._gate_evidence_kind(
+            source_state or current["current_state"],
+            target,
+        )
         if evidence_kind == "PLANNER_RESULT":
             return bound(
                 ["PLANNER_TASK_PACKET", "PLANNER_RESULT"],
@@ -809,9 +976,14 @@ class WorkflowEngine:
         target: str,
         paths: list[Path],
         current: dict[str, Any],
+        *,
+        source_state: str | None = None,
     ) -> list[tuple[str, int, str]] | None:
         try:
-            evidence_kind = self._gate_evidence_kind(current["current_state"], target)
+            evidence_kind = self._gate_evidence_kind(
+                source_state or current["current_state"],
+                target,
+            )
             if evidence_kind == "PLANNER_RESULT":
                 return self._validate_planner_transition_evidence(target, paths, current)
             if evidence_kind == "CODER_HANDOFF":

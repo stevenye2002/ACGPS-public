@@ -861,6 +861,64 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_waiting_human_resume_gate_without_state_writes(self) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        evidence_root = self.state_root / "resume-gate-preview-evidence"
+        evidence_root.mkdir()
+        planner_packet = generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+        planner_packet_path = evidence_root / "planner-packet.json"
+        planner_packet_path.write_bytes(canonical_json_bytes(planner_packet) + b"\n")
+        planner_result_path = evidence_root / "planner-result.json"
+        planner_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=planner_packet["packet_id"],
+                    role="PLANNER",
+                    summary="Completed the bounded Planner work for SPEC_READY.",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="SPEC_READY",
+                )
+            )
+            + b"\n"
+        )
+        before = self._state_root_identity(self.state_root)
+
+        preview = self._run(
+            "task",
+            "resume-gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "SPEC_READY",
+            "--actor",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-28T01:04:00Z",
+            "--decision-resolution",
+            str(resolution_path),
+            "--evidence",
+            str(planner_packet_path),
+            "--evidence",
+            str(planner_result_path),
+        )
+
+        self.assertEqual(preview["status"], "WAITING_HUMAN_RESUME_GATE_PREVIEW")
+        self.assertEqual(preview["source_state_before_human_gate"], "CLASSIFIED")
+        self.assertEqual(preview["target_state"], resolution["resume_state"])
+        self.assertEqual(preview["required_actor"], "PLANNER")
+        self.assertEqual(preview["decision_id"], resolution["decision_id"])
+        self.assertEqual(preview["resolution_status"], "VALIDATED")
+        self.assertEqual(preview["evidence_status"], "VALIDATED")
+        self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+        self.assertEqual(preview["controls"]["model_execution"], "NOT_STARTED")
+        self.assertEqual(preview["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(preview["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_rejects_resolution_preview_for_non_authoritative_pending_request(self) -> None:
         from acgps.human_decisions import DecisionQueue
         from acgps.workflow_store import WorkflowStore
@@ -1194,6 +1252,23 @@ class MVPCLITests(unittest.TestCase):
             str(self.FIXTURE_ROOT / "task-intake.yaml"),
         )
         evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        planner_packet = generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+        planner_packet_path = self.state_root / "planner-packet.json"
+        planner_packet_path.write_bytes(canonical_json_bytes(planner_packet) + b"\n")
+        planner_result_path = self.state_root / "planner-result.json"
+        planner_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=planner_packet["packet_id"],
+                    role="PLANNER",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="SPEC_READY",
+                )
+            )
+            + b"\n"
+        )
         for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
             self._run(
                 "task",
@@ -1270,11 +1345,13 @@ class MVPCLITests(unittest.TestCase):
             "--to-state",
             "SPEC_READY",
             "--actor",
-            "CONTROLLER",
+            "PLANNER",
             "--created-at-utc",
             "2026-08-23T04:04:00Z",
             "--evidence",
-            str(evidence),
+            str(planner_packet_path),
+            "--evidence",
+            str(planner_result_path),
             "--decision-resolution",
             str(resolution_path),
         )

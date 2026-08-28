@@ -98,6 +98,33 @@ bindings. It does not resolve the decision, authorize or perform a workflow
 transition, launch a model or process, or write state. `task advance` remains
 the authoritative transition gate and revalidates the resolution when used.
 
+After that contract-only check, an operator can preview the complete resume
+Gate against the original pre-human transition contract:
+
+```powershell
+python -m acgps task resume-gate-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --to-state SPEC_READY `
+  --actor PLANNER `
+  --created-at-utc 2026-08-28T03:00:00Z `
+  --decision-resolution path/to/decision-resolution.json `
+  --evidence path/to/planner-packet.json `
+  --evidence path/to/planner-result.json
+```
+
+The resume preview requires the exact authoritative pending decision and uses
+the task's preserved `previous_state` to enforce the same actor and ordered
+evidence contract that applied before the human pause. It rechecks task state,
+trusted audit lineage, and pending-decision identity before returning. A
+successful result still reports `authorization_status` as `NOT_GRANTED`; it
+does not resolve the decision, write state, or reserve a later transition.
+`task advance` performs the same resume validation again when separately
+authorized.
+
 After generating a canonical `PLANNER` task packet, an operator can validate
 and preview the handoff without launching a model or writing workflow state:
 

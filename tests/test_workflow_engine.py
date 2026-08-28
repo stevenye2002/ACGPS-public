@@ -253,6 +253,22 @@ def advance_to_waiting_human(engine, *, hour: int) -> dict[str, object]:
     )
 
 
+def waiting_human_resolution(waiting: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "decision_id": waiting["pending_decision_id"],
+        "project_id": "FTIC",
+        "task_id": "ftic-governance-1",
+        "selected_option": "RESUME",
+        "resolved_by": "human_owner",
+        "resolved_at_utc": "2026-08-27T07:04:00Z",
+        "rationale": "Continue the approved supervised workflow.",
+        "evidence_paths": [],
+        "resume_state": "SPEC_READY",
+        "status": "RESOLVED",
+    }
+
+
 def advance_to_task_review(engine, *, hour: int) -> Path:
     evidence = advance_to_implementing(engine, hour=hour)
     engine.advance(
@@ -636,12 +652,15 @@ class WorkflowEngineTests(unittest.TestCase):
                 [
                     {
                         "target_state": "SPEC_READY",
-                        "required_actor": None,
+                        "required_actor": "PLANNER",
                         "evidence_contract": {
-                            "status": "UNSPECIFIED_EXISTING_CONTRACT",
-                            "minimum_count": 1,
-                            "maximum_count": None,
-                            "ordered_kinds": [],
+                            "status": "BOUND_EXISTING_CONTRACT",
+                            "minimum_count": 2,
+                            "maximum_count": 2,
+                            "ordered_kinds": [
+                                "PLANNER_TASK_PACKET",
+                                "PLANNER_RESULT",
+                            ],
                             "repeatable_tail": False,
                         },
                     }
@@ -650,6 +669,210 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertIsNone(preview["selected_transition"])
             self.assertEqual(preview["authorization_status"], "NOT_EVALUATED")
             self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_gate_preview_enforces_original_gate_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            resolution = waiting_human_resolution(waiting)
+            planner_evidence = write_planner_transition_evidence(
+                writer,
+                target="SPEC_READY",
+            )
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(WorkflowEngineError, "requires actor PLANNER"):
+                reader.waiting_human_resume_gate_preview(
+                    "ftic-governance-1",
+                    to_state="SPEC_READY",
+                    actor="CONTROLLER",
+                    evidence_paths=[MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"],
+                    decision_resolution=resolution,
+                    created_at_utc="2026-08-27T07:04:00Z",
+                )
+
+            preview = reader.waiting_human_resume_gate_preview(
+                "ftic-governance-1",
+                to_state="SPEC_READY",
+                actor="PLANNER",
+                evidence_paths=planner_evidence,
+                decision_resolution=resolution,
+                created_at_utc="2026-08-27T07:04:00Z",
+            )
+
+            self.assertEqual(preview["status"], "WAITING_HUMAN_RESUME_GATE_PREVIEW")
+            self.assertEqual(preview["current_state"], "WAITING_HUMAN")
+            self.assertEqual(preview["source_state_before_human_gate"], "CLASSIFIED")
+            self.assertEqual(preview["target_state"], "SPEC_READY")
+            self.assertEqual(preview["required_actor"], "PLANNER")
+            self.assertEqual(preview["decision_id"], waiting["pending_decision_id"])
+            self.assertEqual(preview["resolution_status"], "VALIDATED")
+            self.assertEqual(preview["evidence_status"], "VALIDATED")
+            self.assertEqual(preview["state_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(
+                preview["pending_decision_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+            self.assertEqual(preview["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_advance_rejects_generic_gate_bypass(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = WorkflowEngine(ROOT, Path(tmp) / "state", MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            resolution = waiting_human_resolution(waiting)
+
+            with self.assertRaisesRegex(WorkflowEngineError, "requires actor PLANNER"):
+                writer.advance(
+                    "ftic-governance-1",
+                    "SPEC_READY",
+                    actor="CONTROLLER",
+                    evidence_paths=[MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"],
+                    decision_resolution=resolution,
+                    created_at_utc="2026-08-27T07:04:00Z",
+                )
+
+            self.assertEqual(
+                writer.status("ftic-governance-1")["current_state"],
+                "WAITING_HUMAN",
+            )
+
+    def test_waiting_human_resume_advance_rejects_second_human_pause(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "transition WAITING_HUMAN -> WAITING_HUMAN is not policy-authorized",
+            ):
+                writer.advance(
+                    "ftic-governance-1",
+                    "SPEC_READY",
+                    actor="CONTROLLER",
+                    evidence_paths=[MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"],
+                    decision_resolution=waiting_human_resolution(waiting),
+                    created_at_utc="2026-08-27T07:04:00Z",
+                    human_triggers=["H1_PRODUCT_INTENT"],
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_gate_preview_rejects_identity_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            resolution = waiting_human_resolution(waiting)
+            planner_evidence = write_planner_transition_evidence(writer, target="SPEC_READY")
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            original_prepare = reader._prepare_transition_validation
+
+            def mutate_state_after_validation(*args, **kwargs):
+                prepared = original_prepare(*args, **kwargs)
+                writer.store.write_task_state(
+                    dict(
+                        prepared["current"],
+                        updated_at_utc="2026-08-27T07:04:01Z",
+                    )
+                )
+                return prepared
+
+            with patch.object(
+                reader,
+                "_prepare_transition_validation",
+                side_effect=mutate_state_after_validation,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "task state identity changed during resume gate preview",
+                ):
+                    reader.waiting_human_resume_gate_preview(
+                        "ftic-governance-1",
+                        to_state="SPEC_READY",
+                        actor="PLANNER",
+                        evidence_paths=planner_evidence,
+                        decision_resolution=resolution,
+                        created_at_utc="2026-08-27T07:04:00Z",
+                    )
+
+    def test_waiting_human_resume_gate_preview_rejects_pending_decision_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            resolution = waiting_human_resolution(waiting)
+            planner_evidence = write_planner_transition_evidence(writer, target="SPEC_READY")
+            pending_path = writer.decisions.pending_path(waiting["pending_decision_id"])
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            original_prepare = reader._prepare_transition_validation
+
+            def mutate_pending_after_validation(*args, **kwargs):
+                prepared = original_prepare(*args, **kwargs)
+                pending = json.loads(pending_path.read_text(encoding="utf-8"))
+                pending_path.write_bytes(
+                    canonical_json_bytes(
+                        dict(pending, question="Authorize the same bounded resume now?")
+                    )
+                    + b"\n"
+                )
+                return prepared
+
+            with patch.object(
+                reader,
+                "_prepare_transition_validation",
+                side_effect=mutate_pending_after_validation,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "pending decision identity changed during resume gate preview",
+                ):
+                    reader.waiting_human_resume_gate_preview(
+                        "ftic-governance-1",
+                        to_state="SPEC_READY",
+                        actor="PLANNER",
+                        evidence_paths=planner_evidence,
+                        decision_resolution=resolution,
+                        created_at_utc="2026-08-27T07:04:00Z",
+                    )
 
     def test_waiting_human_next_action_preview_rejects_illegal_pending_target(
         self,
@@ -3605,8 +3828,11 @@ class WorkflowEngineTests(unittest.TestCase):
             resumed = engine.advance(
                 "ftic-governance-1",
                 "SPEC_READY",
-                actor="CONTROLLER",
-                evidence_paths=[evidence],
+                actor="PLANNER",
+                evidence_paths=write_planner_transition_evidence(
+                    engine,
+                    target="SPEC_READY",
+                ),
                 decision_resolution=resolution,
                 created_at_utc="2026-08-23T03:03:00Z",
             )
@@ -3654,8 +3880,11 @@ class WorkflowEngineTests(unittest.TestCase):
             resumed = engine.advance(
                 "ftic-governance-1",
                 "SPEC_READY",
-                actor="CONTROLLER",
-                evidence_paths=[evidence],
+                actor="PLANNER",
+                evidence_paths=write_planner_transition_evidence(
+                    engine,
+                    target="SPEC_READY",
+                ),
                 decision_resolution=resolution,
                 created_at_utc="2026-08-23T07:04:00Z",
             )
@@ -3793,6 +4022,10 @@ class WorkflowEngineTests(unittest.TestCase):
             commit_failure = WorkflowStoreError(
                 WorkflowIssue("WORKFLOW_STATE_CORRUPT", "task_state", "injected commit failure")
             )
+            resume_evidence = write_planner_transition_evidence(
+                engine,
+                target="SPEC_READY",
+            )
 
             with patch.object(
                 engine.store,
@@ -3803,8 +4036,8 @@ class WorkflowEngineTests(unittest.TestCase):
                     engine.advance(
                         "ftic-governance-1",
                         "SPEC_READY",
-                        actor="CONTROLLER",
-                        evidence_paths=[evidence],
+                        actor="PLANNER",
+                        evidence_paths=resume_evidence,
                         decision_resolution=resolution,
                         created_at_utc="2026-08-23T05:04:00Z",
                     )
@@ -3819,8 +4052,8 @@ class WorkflowEngineTests(unittest.TestCase):
             resumed = engine.advance(
                 "ftic-governance-1",
                 "SPEC_READY",
-                actor="CONTROLLER",
-                evidence_paths=[evidence],
+                actor="PLANNER",
+                evidence_paths=resume_evidence,
                 decision_resolution=resolution,
                 created_at_utc="2026-08-23T05:04:00Z",
             )
@@ -3865,6 +4098,10 @@ class WorkflowEngineTests(unittest.TestCase):
                 "resume_state": "SPEC_READY",
                 "status": "RESOLVED",
             }
+            resume_evidence = write_planner_transition_evidence(
+                engine,
+                target="SPEC_READY",
+            )
 
             with patch.object(
                 engine.decisions,
@@ -3875,8 +4112,8 @@ class WorkflowEngineTests(unittest.TestCase):
                     engine.advance(
                         "ftic-governance-1",
                         "SPEC_READY",
-                        actor="CONTROLLER",
-                        evidence_paths=[evidence],
+                        actor="PLANNER",
+                        evidence_paths=resume_evidence,
                         decision_resolution=resolution,
                         created_at_utc="2026-08-23T06:04:00Z",
                     )
