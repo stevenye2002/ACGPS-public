@@ -298,6 +298,29 @@ the same build-artifact boundary used by `rc prepare`. The command writes only
 its validation result to stdout and does not create, repair, authorize, or
 release an RC.
 
+Before requesting the state-changing `VERIFIED -> RC_READY` transition, an
+operator can preview the complete task gate against the current workflow state,
+policy, manifest snapshot, and trusted verification lineage:
+
+```powershell
+python -m acgps rc task-gate-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --manifest path/to/release-candidate.json `
+  --actor VERIFIER `
+  --created-at-utc 2026-08-28T03:00:00Z
+```
+
+The preview opens the workflow controller read-only and reuses the same policy,
+actor, evidence-snapshot, manifest-identity, and latest `VERIFIED` audit-lineage
+checks as `task advance`. A successful preview reports `authorization_status`
+as `NOT_GRANTED`: it does not write state, create a decision, authorize release,
+or reserve a later transition. `task advance` always revalidates current state
+and evidence when an operator separately authorizes the transition.
+
 ## Intended first pilot
 
 FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.

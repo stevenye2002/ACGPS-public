@@ -1481,6 +1481,70 @@ class MVPCLITests(unittest.TestCase):
         manifest_path = Path(str(manifest_result["manifest_path"]))
         self.assertTrue(manifest_path.is_file())
 
+        before_preview = self._run(
+            "task",
+            "status",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--include-audit",
+        )
+        state_root_before_preview = self._state_root_identity(self.state_root)
+        preview = self._run(
+            "rc",
+            "task-gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--manifest",
+            str(manifest_path),
+            "--actor",
+            "VERIFIER",
+            "--created-at-utc",
+            "2026-08-23T00:10:00Z",
+        )
+        self.assertEqual(preview["status"], "RC_READY_GATE_PREVIEW")
+        self.assertEqual(preview["target_state"], "RC_READY")
+        self.assertEqual(preview["evidence_status"], "VALIDATED")
+        self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+        self.assertEqual(
+            preview["manifest_sha256"],
+            hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(preview["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), state_root_before_preview)
+        self.assertEqual(
+            self._run(
+                "task",
+                "status",
+                *self._engine_arguments(),
+                "--task-id",
+                "ftic-governance-1",
+                "--include-audit",
+            ),
+            before_preview,
+        )
+        state_root_before_rejection = self._state_root_identity(self.state_root)
+
+        rejection = self._run(
+            "rc",
+            "task-gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--manifest",
+            str(manifest_path),
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-23T00:10:00Z",
+            expected_exit=2,
+        )
+        self.assertEqual(rejection["status"], "REJECTED")
+        self.assertIn("RC_READY requires actor VERIFIER", str(rejection["error"]))
+        self.assertEqual(self._state_root_identity(self.state_root), state_root_before_rejection)
+
         state = self._run(
             "task",
             "advance",

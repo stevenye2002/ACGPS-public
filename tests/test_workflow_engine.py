@@ -1666,6 +1666,100 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(len(engine.audit("ftic-governance-1")), 10)
             self.assertEqual(tree_bytes(MVP_FTIC_ROOT), managed_before)
 
+    def test_rc_ready_gate_preview_validates_exact_lineage_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                writer,
+                review_path=review_path,
+                verification_paths=verification_paths,
+            )
+            current = writer.status("ftic-governance-1")
+            before = tree_bytes(state_root)
+
+            preview = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).rc_ready_gate_preview(
+                "ftic-governance-1",
+                manifest_path=manifest_path,
+                actor="VERIFIER",
+                created_at_utc="2026-08-23T01:10:00Z",
+            )
+
+            self.assertEqual(
+                preview,
+                {
+                    "status": "RC_READY_GATE_PREVIEW",
+                    "task_id": "ftic-governance-1",
+                    "project_id": "FTIC",
+                    "current_state": "VERIFIED",
+                    "target_state": "RC_READY",
+                    "required_actor": "VERIFIER",
+                    "evidence_status": "VALIDATED",
+                    "manifest_path": "state/release-candidate.json",
+                    "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                    "manifest_size_bytes": manifest_path.stat().st_size,
+                    "audit_generation": current["audit_generation"],
+                    "audit_head_event_id": current["audit_head_event_id"],
+                    "audit_head_hash": current["audit_head_hash"],
+                    "authorization_status": "NOT_GRANTED",
+                    "controls": {
+                        "model_execution": "NOT_STARTED",
+                        "process_launch": "NOT_STARTED",
+                        "state_write": "NOT_PERFORMED",
+                        "workflow_transition": "NOT_PERFORMED",
+                    },
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_rc_ready_gate_preview_rejects_human_gated_policy_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                writer,
+                review_path=review_path,
+                verification_paths=verification_paths,
+            )
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "direct policy-authorized RC_READY transition",
+            ):
+                reader.rc_ready_gate_preview(
+                    "ftic-governance-1",
+                    manifest_path=manifest_path,
+                    actor="VERIFIER",
+                    created_at_utc="2026-08-23T01:10:00Z",
+                    human_triggers=["H1_PRODUCT_INTENT"],
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
     def test_rc_ready_rejects_manifest_changed_after_validation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 

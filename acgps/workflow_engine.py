@@ -258,7 +258,57 @@ class WorkflowEngine:
             "resolution_required": True,
         }
 
-    def advance(
+    def rc_ready_gate_preview(
+        self,
+        task_id: str,
+        *,
+        manifest_path: Path,
+        actor: str,
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        prepared = self._prepare_transition_validation(
+            task_id,
+            "RC_READY",
+            actor=actor,
+            evidence_paths=[manifest_path],
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        if prepared["actual_target"] != "RC_READY":
+            raise WorkflowEngineError(
+                "RC_READY gate preview requires a direct policy-authorized RC_READY transition"
+            )
+        current = prepared["current"]
+        manifest_binding = prepared["evidence_bindings"][0]
+        return {
+            "status": "RC_READY_GATE_PREVIEW",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "target_state": "RC_READY",
+            "required_actor": "VERIFIER",
+            "evidence_status": "VALIDATED",
+            "manifest_path": manifest_binding["path"],
+            "manifest_sha256": manifest_binding["content_sha256"],
+            "manifest_size_bytes": manifest_binding["size_bytes"],
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "authorization_status": "NOT_GRANTED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
+    def _prepare_transition_validation(
         self,
         task_id: str,
         to_state: str,
@@ -269,9 +319,7 @@ class WorkflowEngine:
         risk_triggers: Iterable[str] = (),
         human_triggers: Iterable[str] = (),
         task_attributes: dict[str, str] | None = None,
-        decision_resolution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self._require_writable()
         current = self.status(task_id)
         events = self.audit(task_id)
         sequence = len(events) + 1
@@ -334,6 +382,50 @@ class WorkflowEngine:
             except ReviewEvidenceError as exc:
                 raise WorkflowEngineError(str(exc)) from exc
             self._validate_rc_verification_lineage(bound_manifest, evidence_items[0], current)
+        return {
+            "current": current,
+            "sequence": sequence,
+            "token": token,
+            "evaluation_id": evaluation_id,
+            "policy_result": policy_result,
+            "result": result,
+            "actual_target": actual_target,
+            "evidence_items": evidence_items,
+            "evidence_bindings": evidence_bindings,
+        }
+
+    def advance(
+        self,
+        task_id: str,
+        to_state: str,
+        *,
+        actor: str,
+        evidence_paths: Iterable[Path],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+        decision_resolution: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._require_writable()
+        prepared = self._prepare_transition_validation(
+            task_id,
+            to_state,
+            actor=actor,
+            evidence_paths=evidence_paths,
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        current = prepared["current"]
+        sequence = prepared["sequence"]
+        token = prepared["token"]
+        evaluation_id = prepared["evaluation_id"]
+        policy_result = prepared["policy_result"]
+        result = prepared["result"]
+        actual_target = prepared["actual_target"]
+        evidence_bindings = prepared["evidence_bindings"]
 
         decision_binding = None
         pending_decision_id = None
