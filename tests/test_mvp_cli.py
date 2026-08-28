@@ -590,6 +590,109 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_validated_direct_transition_gate_without_state_writes(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        engine.intake(valid_intake())
+        generic_evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            engine.advance(
+                "ftic-governance-1",
+                target,
+                actor="CONTROLLER",
+                evidence_paths=[generic_evidence],
+                created_at_utc=f"2026-08-28T04:0{index}:00Z",
+            )
+
+        evidence_root = self.state_root / "gate-preview-evidence"
+        evidence_root.mkdir()
+        planner_packet = generate_task_packet("PLANNER", valid_intake(), valid_policy_result())
+        planner_packet_path = evidence_root / "planner-packet.json"
+        planner_packet_path.write_bytes(canonical_json_bytes(planner_packet) + b"\n")
+        for index, target in enumerate(("SPEC_READY", "PLAN_READY"), start=3):
+            planner_result_path = evidence_root / f"planner-{target.casefold()}-result.json"
+            planner_result_path.write_bytes(
+                canonical_json_bytes(
+                    dict(
+                        valid_agent_result(),
+                        packet_id=planner_packet["packet_id"],
+                        role="PLANNER",
+                        summary=f"Completed the bounded Planner work for {target}.",
+                        changed_files=[],
+                        created_files=[],
+                        recommended_next_state=target,
+                    )
+                )
+                + b"\n"
+            )
+            engine.advance(
+                "ftic-governance-1",
+                target,
+                actor="PLANNER",
+                evidence_paths=[planner_packet_path, planner_result_path],
+                created_at_utc=f"2026-08-28T04:0{index}:00Z",
+            )
+
+        coder_packet_path = evidence_root / "coder-packet.json"
+        coder_packet_path.write_bytes(canonical_json_bytes(valid_coder_packet()) + b"\n")
+        current = engine.status("ftic-governance-1")
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "task",
+            "gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "IMPLEMENTING",
+            "--actor",
+            "CODER",
+            "--created-at-utc",
+            "2026-08-28T04:05:00Z",
+            "--evidence",
+            str(coder_packet_path),
+        )
+
+        self.assertEqual(result["status"], "DIRECT_TRANSITION_GATE_PREVIEW")
+        self.assertEqual(result["current_state"], "PLAN_READY")
+        self.assertEqual(result["target_state"], "IMPLEMENTING")
+        self.assertEqual(result["required_actor"], "CODER")
+        self.assertEqual(result["evidence_status"], "VALIDATED")
+        self.assertEqual(result["audit_head_hash"], current["audit_head_hash"])
+        self.assertEqual(result["authorization_status"], "NOT_GRANTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+        rejected = self._run(
+            "task",
+            "gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "IMPLEMENTING",
+            "--actor",
+            "CODER",
+            "--created-at-utc",
+            "2026-08-28T04:06:00Z",
+            "--evidence",
+            str(coder_packet_path),
+            "--human-trigger",
+            "H1_PRODUCT_INTENT",
+            expected_exit=2,
+        )
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("cannot create a WAITING_HUMAN decision", rejected["error"])
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_binds_waiting_human_next_action_to_pending_decision(self) -> None:
         self._run(
             "task",

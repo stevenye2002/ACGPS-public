@@ -144,6 +144,17 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_project_arguments(task_next_action_preview, include_state=True)
     task_next_action_preview.add_argument("--task-id", required=True)
 
+    task_gate_preview = task_commands.add_parser("gate-preview")
+    _add_project_arguments(task_gate_preview, include_state=True)
+    task_gate_preview.add_argument("--task-id", required=True)
+    task_gate_preview.add_argument("--to-state", required=True)
+    task_gate_preview.add_argument("--actor", required=True)
+    task_gate_preview.add_argument("--created-at-utc", required=True)
+    task_gate_preview.add_argument("--evidence", action="append", required=True)
+    task_gate_preview.add_argument("--risk-trigger", action="append", default=[])
+    task_gate_preview.add_argument("--human-trigger", action="append", default=[])
+    task_gate_preview.add_argument("--task-attribute", action="append", default=[])
+
     task_advance = task_commands.add_parser("advance")
     _add_project_arguments(task_advance, include_state=True)
     task_advance.add_argument("--task-id", required=True)
@@ -284,6 +295,24 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).next_action_preview(args.task_id)
+
+    if args.group == "task" and args.command == "gate-preview":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).direct_transition_gate_preview(
+            args.task_id,
+            args.to_state,
+            actor=args.actor,
+            evidence_paths=[Path(path) for path in args.evidence],
+            created_at_utc=args.created_at_utc,
+            risk_triggers=args.risk_trigger,
+            human_triggers=args.human_trigger,
+            task_attributes=_parse_attributes(args.task_attribute),
+        )
 
     if args.group == "task" and args.command == "advance":
         resolution = _read_mapping(Path(args.decision_resolution)) if args.decision_resolution else None

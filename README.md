@@ -280,6 +280,30 @@ SHA-256 in the existing release-candidate manifest contract. An `RC_READY`
 manifest is evidence for a later human release decision; it does not authorize
 publishing, deployment, or production release.
 
+Before requesting any direct state transition, an operator can validate the
+current policy, required actor, and ordered evidence snapshots without changing
+workflow state:
+
+```powershell
+python -m acgps task gate-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --to-state IMPLEMENTING `
+  --actor CODER `
+  --created-at-utc 2026-08-28T03:00:00Z `
+  --evidence path/to/coder-packet.json
+```
+
+The command uses the same gate validation as `task advance`, but reports
+`authorization_status` as `NOT_GRANTED` and performs no state write or workflow
+transition. It rejects policy outcomes that require `WAITING_HUMAN`; use
+`decision resolution-preview` for a task already waiting on a human decision.
+Evidence and current state are revalidated if `task advance` is authorized
+later.
+
 An operator can independently revalidate an existing manifest and all of its
 referenced source, build, verification, review, and rollback evidence without
 rewriting any of them:

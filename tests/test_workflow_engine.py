@@ -1760,6 +1760,137 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_direct_transition_gate_preview_validates_existing_gate_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(writer, hour=2)
+            packet_path = write_coder_handoff_evidence(writer)
+            current = writer.status("ftic-governance-1")
+            before = tree_bytes(state_root)
+
+            preview = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).direct_transition_gate_preview(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=[packet_path],
+                created_at_utc="2026-08-23T02:10:00Z",
+            )
+
+            self.assertEqual(preview["status"], "DIRECT_TRANSITION_GATE_PREVIEW")
+            self.assertEqual(preview["task_id"], "ftic-governance-1")
+            self.assertEqual(preview["project_id"], "FTIC")
+            self.assertEqual(preview["current_state"], "PLAN_READY")
+            self.assertEqual(preview["target_state"], "IMPLEMENTING")
+            self.assertEqual(preview["required_actor"], "CODER")
+            self.assertEqual(preview["evidence_status"], "VALIDATED")
+            self.assertEqual(len(preview["evidence_bindings"]), 1)
+            self.assertEqual(
+                preview["evidence_bindings"][0]["path"],
+                "state/coder-handoff-evidence/implementing-0006/coder-packet.json",
+            )
+            self.assertEqual(
+                preview["evidence_bindings"][0]["content_sha256"],
+                hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                preview["evidence_bindings"][0]["size_bytes"],
+                packet_path.stat().st_size,
+            )
+            self.assertEqual(preview["audit_generation"], current["audit_generation"])
+            self.assertEqual(preview["audit_head_event_id"], current["audit_head_event_id"])
+            self.assertEqual(preview["audit_head_hash"], current["audit_head_hash"])
+            self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+            self.assertEqual(
+                preview["controls"],
+                {
+                    "model_execution": "NOT_STARTED",
+                    "process_launch": "NOT_STARTED",
+                    "state_write": "NOT_PERFORMED",
+                    "workflow_transition": "NOT_PERFORMED",
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_direct_transition_gate_preview_rejects_human_gate_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(writer, hour=3)
+            packet_path = write_coder_handoff_evidence(writer)
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "direct transition gate preview cannot create a WAITING_HUMAN decision",
+            ):
+                reader.direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[packet_path],
+                    created_at_utc="2026-08-23T03:10:00Z",
+                    human_triggers=["H1_PRODUCT_INTENT"],
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_direct_transition_gate_preview_rejects_waiting_human_without_mutation(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_plan_ready(writer, hour=4)
+            packet_path = write_coder_handoff_evidence(writer)
+            waiting = writer.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=[packet_path],
+                created_at_utc="2026-08-23T04:05:00Z",
+                human_triggers=["H1_PRODUCT_INTENT"],
+            )
+            self.assertEqual(waiting["current_state"], "WAITING_HUMAN")
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "use decision resolution-preview",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[packet_path],
+                    created_at_utc="2026-08-23T04:10:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
     def test_rc_ready_rejects_manifest_changed_after_validation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
