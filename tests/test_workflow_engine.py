@@ -489,6 +489,44 @@ class WorkflowEngineTests(unittest.TestCase):
                 ):
                     reader.audit_lineage_verification("ftic-governance-1")
 
+    def test_audit_lineage_verification_rejects_audit_only_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            initial = writer.status("ftic-governance-1")
+            initial_lineage = writer._trusted_audit_lineage(initial)
+            start_recovery_generation(
+                writer,
+                initial,
+                created_at_utc="2026-08-28T09:02:00Z",
+            )
+            changed = writer.status("ftic-governance-1")
+            changed_lineage = writer._trusted_audit_lineage(changed)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with (
+                patch.object(reader, "status", side_effect=[initial, initial]),
+                patch.object(
+                    reader,
+                    "_trusted_audit_lineage",
+                    side_effect=[initial_lineage, changed_lineage],
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "audit lineage identity changed during audit lineage verification",
+                ):
+                    reader.audit_lineage_verification("ftic-governance-1")
+
     def test_next_action_preview_derives_existing_plan_ready_contract_without_mutation(
         self,
     ) -> None:

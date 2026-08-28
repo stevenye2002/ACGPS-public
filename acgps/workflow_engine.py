@@ -175,9 +175,15 @@ class WorkflowEngine:
     def audit_lineage_verification(self, task_id: str) -> dict[str, Any]:
         current = self.status(task_id)
         trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
         if self.status(task_id) != current:
             raise WorkflowEngineError(
                 "task state identity changed during audit lineage verification"
+            )
+        final_lineage = self._trusted_audit_lineage(current)
+        if self._canonical_sha(final_lineage) != trusted_lineage_identity:
+            raise WorkflowEngineError(
+                "audit lineage identity changed during audit lineage verification"
             )
         return {
             "status": "AUDIT_LINEAGE_VERIFIED",
