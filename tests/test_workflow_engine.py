@@ -381,6 +381,26 @@ def prepare_verified_rc_lineage(
     return engine, review_path, verification_paths
 
 
+def prepare_rc_ready_lineage(state_root: Path):
+    engine, review_path, verification_paths = prepare_verified_rc_lineage(
+        state_root,
+        ["verification-current"],
+    )
+    manifest_path = build_test_release_candidate_manifest(
+        engine,
+        review_path=review_path,
+        verification_paths=verification_paths,
+    )
+    engine.advance(
+        "ftic-governance-1",
+        "RC_READY",
+        actor="VERIFIER",
+        evidence_paths=[manifest_path],
+        created_at_utc="2026-08-23T01:10:00Z",
+    )
+    return engine, manifest_path
+
+
 def start_recovery_generation(engine, state: dict[str, object], *, created_at_utc: str) -> None:
     current_generation = int(state["audit_generation"])
     next_generation = current_generation + 1
@@ -2194,6 +2214,256 @@ class WorkflowEngineTests(unittest.TestCase):
                 },
             )
             self.assertEqual(tree_bytes(state_root), before)
+
+    def test_rc_ready_to_closed_preview_exposes_bound_controller_contract_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, review_path, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            manifest_path = build_test_release_candidate_manifest(
+                writer,
+                review_path=review_path,
+                verification_paths=verification_paths,
+            )
+            writer.advance(
+                "ftic-governance-1",
+                "RC_READY",
+                actor="VERIFIER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-23T01:10:00Z",
+            )
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            next_action = reader.next_action_preview("ftic-governance-1")
+            closed_option = next(
+                option
+                for option in next_action["options"]
+                if option["target_state"] == "CLOSED"
+            )
+            self.assertEqual(
+                closed_option,
+                {
+                    "target_state": "CLOSED",
+                    "required_actor": "CONTROLLER",
+                    "evidence_contract": {
+                        "status": "BOUND_EXISTING_CONTRACT",
+                        "minimum_count": 1,
+                        "maximum_count": 1,
+                        "ordered_kinds": ["RELEASE_CANDIDATE_MANIFEST"],
+                        "repeatable_tail": False,
+                    },
+                },
+            )
+
+            preview = reader.direct_transition_gate_preview(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-23T01:11:00Z",
+            )
+
+            self.assertEqual(preview["required_actor"], "CONTROLLER")
+            self.assertEqual(preview["evidence_status"], "VALIDATED")
+            self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_rc_ready_to_closed_rejects_actor_other_than_controller(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, manifest_path = prepare_rc_ready_lineage(state_root)
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(WorkflowEngineError, "CLOSED requires actor CONTROLLER"):
+                reader.direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="VERIFIER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:11:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_rc_ready_to_closed_rejects_manifest_not_bound_by_rc_ready_audit(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, manifest_path = prepare_rc_ready_lineage(state_root)
+            unbound_manifest_path = manifest_path.with_name("unbound-release-candidate.json")
+            unbound_manifest_path.write_bytes(manifest_path.read_bytes())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CLOSED manifest must exactly match the trusted RC_READY audit evidence",
+            ):
+                reader.direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=[unbound_manifest_path],
+                    created_at_utc="2026-08-23T01:11:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_rc_ready_to_closed_rejects_replaced_bound_manifest(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, manifest_path = prepare_rc_ready_lineage(state_root)
+            replacement = json.loads(manifest_path.read_text(encoding="utf-8"))
+            replacement["rc_id"] = "ftic-governance-rc-replacement"
+            manifest_path.write_bytes(canonical_json_bytes(replacement) + b"\n")
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "bound evidence binding content changed",
+            ):
+                reader.direct_transition_gate_preview(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:11:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_rc_ready_to_closed_commits_exact_manifest_as_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, manifest_path = prepare_rc_ready_lineage(state_root)
+
+            state = engine.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-23T01:11:00Z",
+            )
+
+            event = engine.audit("ftic-governance-1")[-1]
+            self.assertEqual(state["current_state"], "CLOSED")
+            self.assertEqual(event["from_state"], "RC_READY")
+            self.assertEqual(event["to_state"], "CLOSED")
+            self.assertEqual(event["actor"], "CONTROLLER")
+            self.assertEqual(len(event["evidence_bindings"]), 1)
+            self.assertEqual(
+                event["evidence_bindings"][0]["content_sha256"],
+                hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            )
+
+    def test_rc_ready_to_closed_revalidates_references_after_manifest_binding(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, manifest_path = prepare_rc_ready_lineage(state_root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source_path = manifest_path.parent / manifest["source_artifact"]["path"]
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            original_binding = engine._path_evidence_binding
+
+            def mutate_source_after_binding(path, *args):
+                binding = original_binding(path, *args)
+                if Path(path) == manifest_path:
+                    source_path.write_text("mutated after closure binding\n", encoding="utf-8")
+                return binding
+
+            with patch.object(
+                engine,
+                "_path_evidence_binding",
+                side_effect=mutate_source_after_binding,
+            ), self.assertRaisesRegex(WorkflowEngineError, "artifact hash mismatch: source.txt"):
+                engine.advance(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:11:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
+
+    def test_rc_ready_to_closed_revalidates_references_before_commit(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine, manifest_path = prepare_rc_ready_lineage(state_root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source_path = manifest_path.parent / manifest["source_artifact"]["path"]
+            before_state = engine.status("ftic-governance-1")
+            before_audit = engine.audit("ftic-governance-1")
+            from acgps import workflow_engine as workflow_engine_module
+
+            original_validate_transition_request = (
+                workflow_engine_module.validate_transition_request
+            )
+
+            def mutate_source_after_transition_validation(request):
+                outcome = original_validate_transition_request(request)
+                source_path.write_text("mutated before closure commit\n", encoding="utf-8")
+                return outcome
+
+            with patch.object(
+                workflow_engine_module,
+                "validate_transition_request",
+                side_effect=mutate_source_after_transition_validation,
+            ), self.assertRaisesRegex(WorkflowEngineError, "artifact hash mismatch: source.txt"):
+                engine.advance(
+                    "ftic-governance-1",
+                    "CLOSED",
+                    actor="CONTROLLER",
+                    evidence_paths=[manifest_path],
+                    created_at_utc="2026-08-23T01:11:00Z",
+                )
+
+            self.assertEqual(engine.status("ftic-governance-1"), before_state)
+            self.assertEqual(engine.audit("ftic-governance-1"), before_audit)
 
     def test_rc_ready_gate_preview_rejects_human_gated_policy_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError

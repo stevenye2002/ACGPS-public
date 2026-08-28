@@ -649,6 +649,12 @@ class WorkflowEngine:
             except ReviewEvidenceError as exc:
                 raise WorkflowEngineError(str(exc)) from exc
             self._validate_rc_verification_lineage(bound_manifest, evidence_items[0], current)
+        elif gate_source_state == "RC_READY" and actual_target == "CLOSED":
+            self._revalidate_rc_ready_closure_evidence(
+                evidence_items,
+                evidence_bindings,
+                current,
+            )
         return {
             "current": current,
             "gate_source_state": gate_source_state,
@@ -769,6 +775,12 @@ class WorkflowEngine:
         outcome = validate_transition_request(request)
         if not outcome.valid:
             raise WorkflowEngineError(outcome.issues[0].message)
+        if prepared["gate_source_state"] == "RC_READY" and actual_target == "CLOSED":
+            self._revalidate_rc_ready_closure_evidence(
+                prepared["evidence_items"],
+                evidence_bindings,
+                current,
+            )
         event_id = f"evt-{token}-{sequence:04d}"
         event = {
             "schema_version": 1,
@@ -868,6 +880,7 @@ class WorkflowEngine:
             ("PLAN_READY", "IMPLEMENTING"): "CODER",
             ("FIX_REQUIRED", "IMPLEMENTING"): "CODER",
             ("INTEGRATING", "FIX_REQUIRED"): "VERIFIER",
+            ("RC_READY", "CLOSED"): "CONTROLLER",
         }.get((from_state, target)) or {
             "FIX_REQUIRED": "REVIEWER",
             "INTEGRATING": "REVIEWER",
@@ -889,6 +902,8 @@ class WorkflowEngine:
             return "CODER_REMEDIATION_HANDOFF"
         if (from_state, target) == ("INTEGRATING", "FIX_REQUIRED"):
             return "VERIFIER_RESULT"
+        if (from_state, target) == ("RC_READY", "CLOSED"):
+            return "RELEASE_CANDIDATE_MANIFEST"
         if from_state == "TASK_REVIEW" and target in {"FIX_REQUIRED", "INTEGRATING"}:
             return "REVIEWER_RESULT"
         if target == "FIX_REQUIRED":
@@ -1047,6 +1062,11 @@ class WorkflowEngine:
             elif evidence_kind == "CODER_RESULT":
                 return self._validate_task_review_evidence(paths, current)
             elif evidence_kind == "RELEASE_CANDIDATE_MANIFEST":
+                if (source_state or current["current_state"], target) == (
+                    "RC_READY",
+                    "CLOSED",
+                ):
+                    return self._validate_rc_ready_closure_manifest(paths, current)
                 if len(paths) != 1:
                     raise WorkflowEngineError(
                         "RC_READY requires exactly one release-candidate manifest"
@@ -1063,6 +1083,64 @@ class WorkflowEngine:
                 return [snapshot]
         except (ContractValidationError, ReviewEvidenceError) as exc:
             raise WorkflowEngineError(str(exc)) from exc
+
+    def _validate_rc_ready_closure_manifest(
+        self,
+        paths: list[Path],
+        current: dict[str, Any],
+    ) -> list[tuple[str, int, str]]:
+        if len(paths) != 1:
+            raise WorkflowEngineError(
+                "CLOSED requires exactly one release-candidate manifest"
+            )
+        manifest, snapshot = self._read_evidence_json_snapshot(paths[0])
+        try:
+            validate_release_candidate_manifest(
+                manifest,
+                paths[0],
+                expected_project_id=current["project_id"],
+                expected_task_id=current["task_id"],
+            )
+        except ReviewEvidenceError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        self._validate_rc_verification_lineage(manifest, paths[0], current)
+
+        rc_ready_event = next(
+            (
+                event
+                for event in reversed(self._trusted_audit_lineage(current))
+                if event["event_type"] == "TRANSITION_ACCEPTED"
+                and event["to_state"] == "RC_READY"
+            ),
+            None,
+        )
+        bindings = rc_ready_event.get("evidence_bindings") if rc_ready_event else None
+        if not isinstance(bindings, list) or len(bindings) != 1:
+            raise WorkflowEngineError(
+                "CLOSED requires the trusted RC_READY manifest audit evidence"
+            )
+        trusted_manifest, trusted_snapshot = self._read_bound_evidence_json_snapshot(
+            bindings[0]
+        )
+        if manifest != trusted_manifest or snapshot != trusted_snapshot:
+            raise WorkflowEngineError(
+                "CLOSED manifest must exactly match the trusted RC_READY audit evidence"
+            )
+        return [snapshot]
+
+    def _revalidate_rc_ready_closure_evidence(
+        self,
+        paths: list[Path],
+        bindings: list[dict[str, Any]],
+        current: dict[str, Any],
+    ) -> None:
+        snapshots = self._validate_rc_ready_closure_manifest(paths, current)
+        bound_snapshots = [
+            (binding["path"], binding["size_bytes"], binding["content_sha256"])
+            for binding in bindings
+        ]
+        if snapshots != bound_snapshots:
+            raise WorkflowEngineError("CLOSED evidence changed after binding")
 
     def _validate_rc_verification_lineage(
         self,

@@ -394,6 +394,16 @@ as `NOT_GRANTED`: it does not write state, create a decision, authorize release,
 or reserve a later transition. `task advance` always revalidates current state
 and evidence when an operator separately authorizes the transition.
 
+After a task reaches `RC_READY`, its existing release-candidate manifest is also
+the only accepted evidence for `RC_READY -> CLOSED`. Use `task gate-preview`
+with `--to-state CLOSED`, actor `CONTROLLER`, and the exact manifest previously
+bound by the trusted `RC_READY` audit event before separately requesting
+`task advance`. The controller requires the same logical path, size, and SHA-256,
+and revalidates the manifest, its referenced evidence, and the latest trusted
+`VERIFIED` lineage after binding and again before commit. `CLOSED` records task
+completion within the authorized scope; it does not authorize publishing,
+deployment, tagging, or production release.
+
 ## Intended first pilot
 
 FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.
