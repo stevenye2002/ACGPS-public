@@ -280,6 +280,24 @@ SHA-256 in the existing release-candidate manifest contract. An `RC_READY`
 manifest is evidence for a later human release decision; it does not authorize
 publishing, deployment, or production release.
 
+An operator can independently revalidate an existing manifest and all of its
+referenced source, build, verification, review, and rollback evidence without
+rewriting any of them:
+
+```powershell
+python -m acgps rc verify `
+  --manifest path/to/release-candidate.json `
+  --expected-project-id PROJECT_ID `
+  --expected-task-id TASK_ID `
+  --require-build-artifacts
+```
+
+The optional identity arguments fail closed when the referenced evidence does
+not belong to the expected project or task. `--require-build-artifacts` applies
+the same build-artifact boundary used by `rc prepare`. The command writes only
+its validation result to stdout and does not create, repair, authorize, or
+release an RC.
+
 ## Intended first pilot
 
 FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.

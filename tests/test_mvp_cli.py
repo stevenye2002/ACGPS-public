@@ -436,6 +436,129 @@ class MVPCLITests(unittest.TestCase):
         resolution_path.write_bytes(canonical_json_bytes(resolution) + b"\n")
         return resolution, resolution_path
 
+    def _release_candidate_manifest(
+        self,
+        *,
+        include_build_artifact: bool = True,
+    ) -> tuple[Path, Path, Path]:
+        from acgps.review_adapter import build_release_candidate_manifest
+
+        root = Path(self.temporary_directory.name) / "rc-verify"
+        evidence = root / "evidence"
+        evidence.mkdir(parents=True)
+        source = root / "source.zip"
+        source.write_bytes(b"frozen source\n")
+        build = root / "build.zip"
+        build.write_bytes(b"frozen build\n")
+        verification = evidence / "verification.json"
+        verification.write_text(
+            json.dumps(valid_verification_record(), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        review = evidence / "review.json"
+        review.write_text(
+            json.dumps(valid_review_finding(), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        rollback = root / "rollback.md"
+        rollback.write_text("Delete the local candidate.\n", encoding="utf-8")
+        manifest = build_release_candidate_manifest(
+            output_dir=root,
+            project_id="FTIC",
+            rc_id="ftic-governance-rc-verify",
+            version="1.0-test",
+            source_path=source,
+            build_artifact_paths=[build] if include_build_artifact else [],
+            verification_paths=[verification],
+            review_paths=[review],
+            rollback_path=rollback,
+            created_at_utc="2026-08-28T02:00:00Z",
+        )
+        return root, manifest, build
+
+    def test_cli_verifies_existing_rc_manifest_without_writes(self) -> None:
+        root, manifest, _ = self._release_candidate_manifest()
+        before = self._state_root_identity(root)
+
+        result = self._run(
+            "rc",
+            "verify",
+            "--manifest",
+            str(manifest),
+            "--expected-project-id",
+            "FTIC",
+            "--expected-task-id",
+            "ftic-governance-1",
+            "--require-build-artifacts",
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "manifest_path": str(manifest.resolve(strict=True)),
+                "status": "VALID",
+            },
+        )
+        self.assertEqual(self._state_root_identity(root), before)
+
+    def test_cli_rc_verify_rejects_identity_mismatch_without_writes(self) -> None:
+        root, manifest, _ = self._release_candidate_manifest()
+        before = self._state_root_identity(root)
+
+        cases = (
+            ("--expected-project-id", "OTHER", "project_id does not match"),
+            ("--expected-task-id", "other-task", "task_id does not match"),
+        )
+        for flag, value, expected_error in cases:
+            with self.subTest(flag=flag):
+                result = self._run(
+                    "rc",
+                    "verify",
+                    "--manifest",
+                    str(manifest),
+                    flag,
+                    value,
+                    expected_exit=2,
+                )
+                self.assertEqual(result["status"], "REJECTED")
+                self.assertIn(expected_error, str(result["error"]))
+        self.assertEqual(self._state_root_identity(root), before)
+
+    def test_cli_rc_verify_enforces_required_build_artifacts_without_writes(self) -> None:
+        root, manifest, _ = self._release_candidate_manifest(include_build_artifact=False)
+        before = self._state_root_identity(root)
+
+        result = self._run(
+            "rc",
+            "verify",
+            "--manifest",
+            str(manifest),
+            "--require-build-artifacts",
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("requires at least one build artifact", str(result["error"]))
+        self.assertEqual(self._state_root_identity(root), before)
+
+    def test_cli_rc_verify_rejects_tampered_artifact_without_writes(self) -> None:
+        root, manifest, build = self._release_candidate_manifest()
+        build.write_bytes(b"tampered build\n")
+        before = self._state_root_identity(root)
+
+        result = self._run(
+            "rc",
+            "verify",
+            "--manifest",
+            str(manifest),
+            "--require-build-artifacts",
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("artifact hash mismatch", str(result["error"]))
+        self.assertEqual(self._state_root_identity(root), before)
+
     def test_cli_previews_task_next_actions_without_state_writes(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 

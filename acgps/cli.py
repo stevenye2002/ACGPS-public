@@ -186,6 +186,11 @@ def _build_parser() -> argparse.ArgumentParser:
     rc_prepare.add_argument("--review", action="append", required=True)
     rc_prepare.add_argument("--rollback", required=True)
     rc_prepare.add_argument("--created-at-utc", required=True)
+    rc_verify = rc_commands.add_parser("verify")
+    rc_verify.add_argument("--manifest", required=True)
+    rc_verify.add_argument("--expected-project-id")
+    rc_verify.add_argument("--expected-task-id")
+    rc_verify.add_argument("--require-build-artifacts", action="store_true")
 
     plan = commands.add_parser("plan")
     plan_commands = plan.add_subparsers(dest="command", required=True)
@@ -367,6 +372,19 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         )
         verify_release_candidate_manifest(manifest_path, require_build_artifacts=True)
         return {"status": "RC_READY", "manifest_path": str(manifest_path.resolve(strict=True))}
+
+    if args.group == "rc" and args.command == "verify":
+        manifest_path = Path(args.manifest)
+        verify_release_candidate_manifest(
+            manifest_path,
+            expected_project_id=args.expected_project_id,
+            expected_task_id=args.expected_task_id,
+            require_build_artifacts=args.require_build_artifacts,
+        )
+        return {
+            "status": "VALID",
+            "manifest_path": str(manifest_path.resolve(strict=True)),
+        }
 
     if args.group == "coding" and args.command == "gate-init":
         return WorkflowStore(Path(args.state_root)).initialize_coding_execution_slot(args.gate_id, args.task_id)
