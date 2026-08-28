@@ -253,7 +253,23 @@ def advance_to_waiting_human(engine, *, hour: int) -> dict[str, object]:
     )
 
 
-def waiting_human_resolution(waiting: dict[str, object]) -> dict[str, object]:
+def advance_plan_ready_to_waiting_human(engine, *, hour: int) -> dict[str, object]:
+    evidence = advance_to_plan_ready(engine, hour=hour)
+    return engine.advance(
+        "ftic-governance-1",
+        "IMPLEMENTING",
+        actor="CONTROLLER",
+        evidence_paths=[evidence],
+        human_triggers=["H1_PRODUCT_INTENT"],
+        created_at_utc=f"2026-08-27T{hour:02d}:05:00Z",
+    )
+
+
+def waiting_human_resolution(
+    waiting: dict[str, object],
+    *,
+    resume_state: str = "SPEC_READY",
+) -> dict[str, object]:
     return {
         "schema_version": 1,
         "decision_id": waiting["pending_decision_id"],
@@ -264,7 +280,7 @@ def waiting_human_resolution(waiting: dict[str, object]) -> dict[str, object]:
         "resolved_at_utc": "2026-08-27T07:04:00Z",
         "rationale": "Continue the approved supervised workflow.",
         "evidence_paths": [],
-        "resume_state": "SPEC_READY",
+        "resume_state": resume_state,
         "status": "RESOLVED",
     }
 
@@ -774,6 +790,128 @@ class WorkflowEngineTests(unittest.TestCase):
                     decision_resolution=waiting_human_resolution(waiting),
                     created_at_utc="2026-08-27T07:04:00Z",
                     human_triggers=["H1_PRODUCT_INTENT"],
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_rejects_source_state_not_bound_to_audit_head(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_plan_ready_to_waiting_human(writer, hour=7)
+            corrupted = dict(writer.status("ftic-governance-1"), previous_state="BLOCKED")
+            writer.store.write_task_state(corrupted)
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "previous_state does not match the trusted WAITING_HUMAN audit boundary",
+            ):
+                reader.waiting_human_resume_gate_preview(
+                    "ftic-governance-1",
+                    to_state="IMPLEMENTING",
+                    actor="CONTROLLER",
+                    evidence_paths=[MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"],
+                    decision_resolution=waiting_human_resolution(
+                        waiting,
+                        resume_state="IMPLEMENTING",
+                    ),
+                    created_at_utc="2026-08-27T07:06:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_from_plan_ready_uses_frozen_plan_boundary(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_plan_ready_to_waiting_human(writer, hour=7)
+            resolution = waiting_human_resolution(waiting, resume_state="IMPLEMENTING")
+            coder_packet = write_coder_handoff_evidence(writer)
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            try:
+                preview = reader.waiting_human_resume_gate_preview(
+                    "ftic-governance-1",
+                    to_state="IMPLEMENTING",
+                    actor="CODER",
+                    evidence_paths=[coder_packet],
+                    decision_resolution=resolution,
+                    created_at_utc="2026-08-27T07:06:00Z",
+                )
+            except WorkflowEngineError as exc:
+                self.fail(f"valid PLAN_READY resume preview was rejected: {exc}")
+
+            self.assertEqual(preview["source_state_before_human_gate"], "PLAN_READY")
+            self.assertEqual(preview["required_actor"], "CODER")
+            self.assertEqual(preview["evidence_status"], "VALIDATED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+            resumed = writer.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=[coder_packet],
+                decision_resolution=resolution,
+                created_at_utc="2026-08-27T07:06:00Z",
+            )
+            self.assertEqual(resumed["current_state"], "IMPLEMENTING")
+
+    def test_waiting_human_resume_preview_rejects_conflicting_stored_resolution(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            stored_resolution = waiting_human_resolution(waiting)
+            writer.decisions.resolve(stored_resolution)
+            conflicting_resolution = dict(
+                stored_resolution,
+                rationale="A different otherwise-valid human rationale.",
+            )
+            planner_evidence = write_planner_transition_evidence(
+                writer,
+                target="SPEC_READY",
+            )
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "resolution does not match the existing resolved decision record",
+            ):
+                reader.waiting_human_resume_gate_preview(
+                    "ftic-governance-1",
+                    to_state="SPEC_READY",
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    decision_resolution=conflicting_resolution,
+                    created_at_utc="2026-08-27T07:04:00Z",
                 )
 
             self.assertEqual(tree_bytes(state_root), before)

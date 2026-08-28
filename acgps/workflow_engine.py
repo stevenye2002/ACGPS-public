@@ -320,6 +320,13 @@ class WorkflowEngine:
             pending_records = self.decisions.list_pending()
         except DecisionQueueError as exc:
             raise WorkflowEngineError(str(exc)) from exc
+        resolved_path = self.decisions.resolved_path(decision_resolution["decision_id"])
+        if resolved_path.exists():
+            stored_resolution, _ = self._read_canonical_evidence_json(resolved_path)
+            if stored_resolution != decision_resolution:
+                raise WorkflowEngineError(
+                    "resolution does not match the existing resolved decision record"
+                )
         if (
             request["project_id"] != current["project_id"]
             or request["task_id"] != current["task_id"]
@@ -813,8 +820,12 @@ class WorkflowEngine:
         if self.read_only:
             raise WorkflowEngineError("read-only workflow engine cannot modify state")
 
-    @staticmethod
-    def _transition_gate_source_state(current: dict[str, Any]) -> str:
+    def _transition_gate_source_state(
+        self,
+        current: dict[str, Any],
+        *,
+        trusted_lineage: list[dict[str, Any]] | None = None,
+    ) -> str:
         source_state = current["current_state"]
         if source_state != "WAITING_HUMAN":
             return source_state
@@ -822,6 +833,30 @@ class WorkflowEngine:
         if not isinstance(source_state, str) or source_state == "WAITING_HUMAN":
             raise WorkflowEngineError(
                 "WAITING_HUMAN state requires a valid original source state"
+            )
+        lineage = (
+            trusted_lineage
+            if trusted_lineage is not None
+            else self._trusted_audit_lineage(current)
+        )
+        waiting_boundary = next(
+            (
+                event
+                for event in reversed(lineage)
+                if event["event_type"] == "TRANSITION_ACCEPTED"
+            ),
+            None,
+        )
+        if (
+            waiting_boundary is None
+            or waiting_boundary["to_state"] != "WAITING_HUMAN"
+        ):
+            raise WorkflowEngineError(
+                "WAITING_HUMAN state is not bound to a trusted human-pause audit boundary"
+            )
+        if waiting_boundary["from_state"] != source_state:
+            raise WorkflowEngineError(
+                "previous_state does not match the trusted WAITING_HUMAN audit boundary"
             )
         return source_state
 
@@ -1141,7 +1176,18 @@ class WorkflowEngine:
             event for event in events if event["event_type"] == "TRANSITION_ACCEPTED"
         ]
         if require_latest_transition:
-            plan_boundary = transitions[-1] if transitions else None
+            if current["current_state"] == "WAITING_HUMAN":
+                source_state = self._transition_gate_source_state(
+                    current,
+                    trusted_lineage=events,
+                )
+                plan_boundary = (
+                    transitions[-2]
+                    if source_state == "PLAN_READY" and len(transitions) >= 2
+                    else None
+                )
+            else:
+                plan_boundary = transitions[-1] if transitions else None
         else:
             plan_boundary = next(
                 (
