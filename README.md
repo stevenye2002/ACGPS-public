@@ -59,6 +59,23 @@ not a resolution or transition authorization. Missing, foreign, duplicate, or
 workflow-inapplicable pending-decision records fail closed without changing
 state.
 
+Before submitting a human decision resolution to `task advance`, an operator
+can validate its canonical JSON contract and its binding to the authoritative
+pending request:
+
+```powershell
+python -m acgps decision resolution-preview `
+  --state-root path/to/state `
+  --resolution path/to/decision-resolution.json
+```
+
+The preview writes JSON to stdout only. It verifies the complete pending queue
+against authoritative `WAITING_HUMAN` task state, then reuses the existing
+resolution validator to check decision, project, task, resume-state, and option
+bindings. It does not resolve the decision, authorize or perform a workflow
+transition, launch a model or process, or write state. `task advance` remains
+the authoritative transition gate and revalidates the resolution when used.
+
 After generating a canonical `PLANNER` task packet, an operator can validate
 and preview the handoff without launching a model or writing workflow state:
 

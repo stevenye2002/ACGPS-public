@@ -377,6 +377,65 @@ class MVPCLITests(unittest.TestCase):
             "ftic-v1",
         ]
 
+    def _waiting_human_resolution(self) -> tuple[dict[str, object], Path]:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            self._run(
+                "task",
+                "advance",
+                *self._engine_arguments(),
+                "--task-id",
+                "ftic-governance-1",
+                "--to-state",
+                target,
+                "--actor",
+                "CONTROLLER",
+                "--created-at-utc",
+                f"2026-08-28T01:0{index}:00Z",
+                "--evidence",
+                str(evidence),
+            )
+        waiting = self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "SPEC_READY",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-28T01:03:00Z",
+            "--evidence",
+            str(evidence),
+            "--human-trigger",
+            "H1_PRODUCT_INTENT",
+        )
+        resolution: dict[str, object] = {
+            "schema_version": 1,
+            "decision_id": waiting["pending_decision_id"],
+            "project_id": "FTIC",
+            "task_id": "ftic-governance-1",
+            "selected_option": "RESUME",
+            "resolved_by": "human_owner",
+            "resolved_at_utc": "2026-08-28T01:04:00Z",
+            "rationale": "Continue the approved supervised workflow.",
+            "evidence_paths": [],
+            "resume_state": "SPEC_READY",
+            "status": "RESOLVED",
+        }
+        resolution_path = self.state_root / "decision-resolution-preview.json"
+        resolution_path.write_bytes(canonical_json_bytes(resolution) + b"\n")
+        return resolution, resolution_path
+
     def test_cli_previews_task_next_actions_without_state_writes(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 
@@ -475,6 +534,119 @@ class MVPCLITests(unittest.TestCase):
             [option["target_state"] for option in preview["options"]],
             ["SPEC_READY"],
         )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_previews_validated_human_decision_resolution_without_state_writes(self) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        before = self._state_root_identity(self.state_root)
+
+        preview = self._run(
+            "decision",
+            "resolution-preview",
+            "--state-root",
+            str(self.state_root),
+            "--resolution",
+            str(resolution_path),
+        )
+
+        self.assertEqual(
+            preview,
+            {
+                "status": "RESOLUTION_PREVIEW",
+                "decision_id": resolution["decision_id"],
+                "project_id": "FTIC",
+                "task_id": "ftic-governance-1",
+                "selected_option": "RESUME",
+                "resume_state": "SPEC_READY",
+                "pending_request_status": "PENDING",
+                "authorization_status": "NOT_EVALUATED",
+                "controls": {
+                    "model_execution": "NOT_STARTED",
+                    "process_launch": "NOT_STARTED",
+                    "state_write": "NOT_PERFORMED",
+                    "workflow_transition": "NOT_PERFORMED",
+                },
+            },
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_rejects_resolution_preview_for_non_authoritative_pending_request(self) -> None:
+        from acgps.human_decisions import DecisionQueue
+        from acgps.workflow_store import WorkflowStore
+
+        WorkflowStore(self.state_root)
+        request = valid_decision_request()
+        DecisionQueue(self.state_root / "decisions").create(request)
+        resolution = {
+            "schema_version": 1,
+            "decision_id": "decision-1",
+            "project_id": "FTIC",
+            "task_id": "ftic-governance-1",
+            "selected_option": "RESUME",
+            "resolved_by": "human_owner",
+            "resolved_at_utc": "2026-08-28T01:04:00Z",
+            "rationale": "Continue the approved supervised workflow.",
+            "evidence_paths": [],
+            "resume_state": "SPEC_READY",
+            "status": "RESOLVED",
+        }
+        resolution_path = self.state_root / "decision-resolution-preview.json"
+        resolution_path.write_bytes(canonical_json_bytes(resolution) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        rejected = self._run(
+            "decision",
+            "resolution-preview",
+            "--state-root",
+            str(self.state_root),
+            "--resolution",
+            str(resolution_path),
+            expected_exit=2,
+        )
+
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("authoritative", rejected["error"])
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_rejects_resolution_preview_with_unoffered_option(self) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        invalid_resolution = dict(resolution, selected_option="UNAVAILABLE")
+        resolution_path.write_bytes(canonical_json_bytes(invalid_resolution) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        rejected = self._run(
+            "decision",
+            "resolution-preview",
+            "--state-root",
+            str(self.state_root),
+            "--resolution",
+            str(resolution_path),
+            expected_exit=2,
+        )
+
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("selected_option", rejected["error"])
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_rejects_malformed_resolution_preview_without_traceback(self) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        invalid_resolution = dict(resolution)
+        invalid_resolution.pop("decision_id")
+        resolution_path.write_bytes(canonical_json_bytes(invalid_resolution) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        rejected = self._run(
+            "decision",
+            "resolution-preview",
+            "--state-root",
+            str(self.state_root),
+            "--resolution",
+            str(resolution_path),
+            expected_exit=2,
+        )
+
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("human_decision_resolution", rejected["error"])
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
     def test_cli_initializes_and_reads_bounded_coding_gate(self) -> None:

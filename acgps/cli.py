@@ -79,6 +79,27 @@ def _engine(args: argparse.Namespace) -> WorkflowEngine:
     )
 
 
+def _read_only_decision_queue(state_root: Path) -> DecisionQueue:
+    resolved_state_root = Path(state_root).resolve(strict=True)
+    if not resolved_state_root.is_dir():
+        raise ValueError("state root must be a directory")
+    workflow_store = WorkflowStore(resolved_state_root, read_only=True)
+    decision_root = resolved_state_root / "decisions"
+    if decision_root.exists():
+        resolved_decision_root = decision_root.resolve(strict=True)
+        if not resolved_decision_root.is_dir() or not resolved_decision_root.is_relative_to(
+            resolved_state_root
+        ):
+            raise ValueError("decision root must remain beneath state root")
+    else:
+        resolved_decision_root = decision_root
+    return DecisionQueue(
+        resolved_decision_root,
+        workflow_store=workflow_store,
+        create_root=False,
+    )
+
+
 def _add_project_arguments(parser: argparse.ArgumentParser, *, include_state: bool) -> None:
     parser.add_argument("--policy-root", required=True)
     if include_state:
@@ -148,6 +169,9 @@ def _build_parser() -> argparse.ArgumentParser:
     decision_commands = decision.add_subparsers(dest="command", required=True)
     decision_pending = decision_commands.add_parser("pending")
     decision_pending.add_argument("--state-root", required=True)
+    decision_resolution_preview = decision_commands.add_parser("resolution-preview")
+    decision_resolution_preview.add_argument("--state-root", required=True)
+    decision_resolution_preview.add_argument("--resolution", required=True)
 
     rc = commands.add_parser("rc")
     rc_commands = rc.add_subparsers(dest="command", required=True)
@@ -288,25 +312,45 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return packet
 
     if args.group == "decision" and args.command == "pending":
-        state_root = Path(args.state_root).resolve(strict=True)
-        if not state_root.is_dir():
-            raise ValueError("state root must be a directory")
-        workflow_store = WorkflowStore(state_root, read_only=True)
-        decision_root = state_root / "decisions"
-        if decision_root.exists():
-            resolved_decision_root = decision_root.resolve(strict=True)
-            if not resolved_decision_root.is_dir() or not resolved_decision_root.is_relative_to(state_root):
-                raise ValueError("decision root must remain beneath state root")
-        else:
-            resolved_decision_root = decision_root
-        decisions = DecisionQueue(
-            resolved_decision_root,
-            workflow_store=workflow_store,
-            create_root=False,
-        ).list_pending()
+        decisions = _read_only_decision_queue(Path(args.state_root)).list_pending()
         for decision_record in decisions:
             validate_contract("human_decision_request", decision_record, mode="runtime")
         return {"decisions": decisions, "status": "PENDING" if decisions else "CLEAR"}
+
+    if args.group == "decision" and args.command == "resolution-preview":
+        resolution = _read_canonical_json_mapping(Path(args.resolution))
+        decisions = _read_only_decision_queue(Path(args.state_root))
+        pending_records = decisions.list_pending()
+        request = decisions.validate_resolution(resolution)
+        authoritative_matches = [
+            record
+            for record in pending_records
+            if record["decision_id"] == request["decision_id"]
+        ]
+        if len(authoritative_matches) != 1:
+            raise ValueError(
+                "resolution request does not match the authoritative pending decision"
+            )
+        if authoritative_matches[0] != request:
+            raise ValueError(
+                "resolution request does not match the authoritative pending decision"
+            )
+        return {
+            "status": "RESOLUTION_PREVIEW",
+            "decision_id": resolution["decision_id"],
+            "project_id": resolution["project_id"],
+            "task_id": resolution["task_id"],
+            "selected_option": resolution["selected_option"],
+            "resume_state": resolution["resume_state"],
+            "pending_request_status": request["status"],
+            "authorization_status": "NOT_EVALUATED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
 
     if args.group == "rc" and args.command == "prepare":
         manifest_path = build_release_candidate_manifest(
