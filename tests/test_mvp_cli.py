@@ -685,6 +685,55 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(gate["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_advances_trusted_result_through_existing_transition_contract(
+        self,
+    ) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        agent_result = dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="PLANNER",
+            changed_files=[],
+            recommended_next_state="SPEC_READY",
+        )
+        result_path = self.state_root / "results" / "planner.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+
+        result = self._run(
+            "packet",
+            "trusted-result-transition-advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+            "--result",
+            str(result_path),
+            "--created-at-utc",
+            "2026-08-29T06:20:00Z",
+        )
+
+        self.assertEqual(result["current_state"], "SPEC_READY")
+        status = self._run(
+            "task",
+            "status",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--include-audit",
+        )
+        event = status["audit"][-1]
+        self.assertEqual(event["actor"], "PLANNER")
+        self.assertEqual(event["to_state"], "SPEC_READY")
+        self.assertEqual(
+            [binding["content_sha256"] for binding in event["evidence_bindings"]],
+            [
+                hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+                hashlib.sha256(result_path.read_bytes()).hexdigest(),
+            ],
+        )
+
     def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
         packet_path, packet = self._prepare_r2_packet()
         packet_path.write_bytes(

@@ -5,7 +5,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from acgps.contracts import ContractValidationError, validate_contract
 from acgps.human_decisions import DecisionQueue, DecisionQueueError
@@ -553,6 +553,138 @@ class WorkflowEngine:
             "trusted_result_receipt_preview": final_receipt,
             "transition_gate_preview": gate_preview,
         }
+
+    def trusted_task_packet_result_transition_advance(
+        self,
+        task_id: str,
+        packet_path: Path,
+        result_path: Path,
+        *,
+        evidence_paths: Iterable[Path],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        self._require_writable()
+        receipt = self.trusted_task_packet_result_receipt_preview(
+            task_id,
+            packet_path,
+            result_path,
+        )
+        verification = receipt["task_packet_verification"]
+        receipt_preview = receipt["result_receipt_preview"]
+        packet, packet_snapshot = self._read_canonical_evidence_json(packet_path)
+        agent_result, result_snapshot = self._read_canonical_evidence_json(
+            result_path
+        )
+        if (
+            packet["packet_id"] != verification["packet_id"]
+            or packet["role"] != verification["role"]
+            or self._canonical_sha(packet) != verification["packet_sha256"]
+            or receipt_preview["agent_result"] != agent_result
+            or receipt_preview["agent_result_sha256"]
+            != self._canonical_sha(agent_result)
+        ):
+            raise WorkflowEngineError(
+                "trusted Packet/Result identity does not match the receipt preview"
+            )
+
+        role = verification["role"]
+        target = agent_result["recommended_next_state"]
+        source_state = verification["current_state"]
+        if (
+            self._required_transition_actor(source_state, target) != role
+            or self._gate_evidence_kind(source_state, target)
+            != f"{role}_RESULT"
+        ):
+            raise WorkflowEngineError(
+                "trusted result receipt does not match the current transition evidence contract"
+            )
+
+        prepared = self._prepare_transition_validation(
+            task_id,
+            target,
+            actor=role,
+            evidence_paths=[packet_path, result_path, *evidence_paths],
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        if prepared["actual_target"] != target:
+            raise WorkflowEngineError(
+                "trusted result transition advance requires a direct policy-authorized transition"
+            )
+        current = prepared["current"]
+        current_identity = {
+            key: current[key]
+            for key in (
+                "task_id",
+                "project_id",
+                "current_state",
+                "audit_generation",
+                "audit_head_event_id",
+                "audit_head_hash",
+            )
+        }
+        verification_identity = {
+            key: verification[key]
+            for key in current_identity
+        }
+        if current_identity != verification_identity:
+            raise WorkflowEngineError(
+                "trusted task state identity changed during transition preparation"
+            )
+        prepared_snapshots = [
+            (
+                binding["path"],
+                binding["size_bytes"],
+                binding["content_sha256"],
+            )
+            for binding in prepared["evidence_bindings"][:2]
+        ]
+        if prepared_snapshots != [packet_snapshot, result_snapshot]:
+            raise WorkflowEngineError(
+                "trusted Packet/Result identity changed during transition preparation"
+            )
+
+        def require_final_trusted_identity() -> None:
+            try:
+                final_receipt = self.trusted_task_packet_result_receipt_preview(
+                    task_id,
+                    packet_path,
+                    result_path,
+                )
+                final_packet, final_packet_snapshot = (
+                    self._read_canonical_evidence_json(packet_path)
+                )
+                final_result, final_result_snapshot = (
+                    self._read_canonical_evidence_json(result_path)
+                )
+            except WorkflowEngineError as exc:
+                raise WorkflowEngineError(
+                    "trusted Packet/Result identity changed before trusted transition commit"
+                ) from exc
+            if (
+                final_receipt != receipt
+                or final_packet != packet
+                or final_packet_snapshot != packet_snapshot
+                or final_result != agent_result
+                or final_result_snapshot != result_snapshot
+            ):
+                raise WorkflowEngineError(
+                    "trusted Packet/Result identity changed before trusted transition commit"
+                )
+
+        return self._commit_prepared_transition(
+            task_id,
+            target,
+            actor=role,
+            created_at_utc=created_at_utc,
+            prepared=prepared,
+            final_identity_check=require_final_trusted_identity,
+        )
 
     def _require_task_state_audit_tail_binding(
         self,
@@ -1146,30 +1278,17 @@ class WorkflowEngine:
             "evidence_bindings": evidence_bindings,
         }
 
-    def advance(
+    def _commit_prepared_transition(
         self,
         task_id: str,
         to_state: str,
         *,
         actor: str,
-        evidence_paths: Iterable[Path],
         created_at_utc: str,
-        risk_triggers: Iterable[str] = (),
-        human_triggers: Iterable[str] = (),
-        task_attributes: dict[str, str] | None = None,
+        prepared: dict[str, Any],
         decision_resolution: dict[str, Any] | None = None,
+        final_identity_check: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
-        self._require_writable()
-        prepared = self._prepare_transition_validation(
-            task_id,
-            to_state,
-            actor=actor,
-            evidence_paths=evidence_paths,
-            created_at_utc=created_at_utc,
-            risk_triggers=risk_triggers,
-            human_triggers=human_triggers,
-            task_attributes=task_attributes,
-        )
         current = prepared["current"]
         sequence = prepared["sequence"]
         token = prepared["token"]
@@ -1184,7 +1303,9 @@ class WorkflowEngine:
         if actual_target == "WAITING_HUMAN":
             trigger_items = list(result["required_human_triggers"])
             if not trigger_items:
-                raise WorkflowEngineError("WAITING_HUMAN requires a policy-defined human trigger")
+                raise WorkflowEngineError(
+                    "WAITING_HUMAN requires a policy-defined human trigger"
+                )
             pending_decision_id = f"decision-{token}-{sequence:04d}"
             self.decisions.create(
                 {
@@ -1209,7 +1330,9 @@ class WorkflowEngine:
                         }
                     ],
                     "default_without_response": "PAUSE",
-                    "evidence_paths": [binding["path"] for binding in evidence_bindings],
+                    "evidence_paths": [
+                        binding["path"] for binding in evidence_bindings
+                    ],
                     "created_at_utc": created_at_utc,
                     "status": "PENDING",
                 }
@@ -1221,7 +1344,9 @@ class WorkflowEngine:
                 decision_resolution=decision_resolution,
             )
         elif decision_resolution is not None:
-            raise WorkflowEngineError("decision resolution is only valid when resuming WAITING_HUMAN")
+            raise WorkflowEngineError(
+                "decision resolution is only valid when resuming WAITING_HUMAN"
+            )
 
         policy_binding = {
             "schema_version": 1,
@@ -1300,17 +1425,55 @@ class WorkflowEngine:
                 evidence_bindings,
                 current,
             )
-        elif prepared["gate_source_state"] == "VERIFIED" and actual_target == "CLOSED":
+        elif (
+            prepared["gate_source_state"] == "VERIFIED"
+            and actual_target == "CLOSED"
+        ):
             self._revalidate_verified_closure_evidence(
                 prepared["evidence_items"],
                 evidence_bindings,
                 current,
             )
+        if final_identity_check is not None:
+            final_identity_check()
         try:
             self.store.commit_task_state_and_audit(event, state)
         except WorkflowStoreError as exc:
             raise WorkflowEngineError(str(exc)) from exc
         return self.status(task_id)
+
+    def advance(
+        self,
+        task_id: str,
+        to_state: str,
+        *,
+        actor: str,
+        evidence_paths: Iterable[Path],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+        decision_resolution: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._require_writable()
+        prepared = self._prepare_transition_validation(
+            task_id,
+            to_state,
+            actor=actor,
+            evidence_paths=evidence_paths,
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        return self._commit_prepared_transition(
+            task_id,
+            to_state,
+            actor=actor,
+            created_at_utc=created_at_utc,
+            prepared=prepared,
+            decision_resolution=decision_resolution,
+        )
 
     def _require_writable(self) -> None:
         if self.read_only:

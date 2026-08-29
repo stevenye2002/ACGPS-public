@@ -150,6 +150,33 @@ command rechecks the complete trusted receipt identity. Its nested gate result
 still reports `authorization_status: NOT_GRANTED` and performs no state write,
 model or process launch, or workflow transition.
 
+After an operator has separately authorized the transition, the same trusted
+Packet/Result composition can advance the task through the existing workflow
+contract:
+
+```powershell
+python -m acgps packet trusted-result-transition-advance `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --packet path/to/packet.json `
+  --result path/to/agent-result.json `
+  --created-at-utc 2026-08-29T06:00:00Z `
+  --evidence path/to/required-review-or-verification-record.json
+```
+
+The command derives both actor and target from the trusted records and accepts
+the same Planner, Coder, Reviewer, and Verifier result transitions as the
+read-only Gate preview. It does not admit generic, handoff-only, closure,
+release-candidate, or `WAITING_HUMAN` paths. Packet, Result, current task/audit
+identity, policy authorization, and ordered evidence are bound to one prepared
+transition and checked again immediately before the existing atomic workflow
+state/audit commit. A human Gate or any identity drift fails before that commit.
+The command does not launch a model or external process; its only product state
+write is the accepted transition's existing workflow state/audit transaction.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current

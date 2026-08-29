@@ -1153,6 +1153,130 @@ class WorkflowEngineTests(unittest.TestCase):
             )
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_result_transition_advance_commits_planner_result_atomically(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+
+            state = writer.trusted_task_packet_result_transition_advance(
+                "ftic-governance-1",
+                packet_path,
+                result_path,
+                evidence_paths=[],
+                created_at_utc="2026-08-29T06:10:00Z",
+            )
+
+            self.assertEqual(state["current_state"], "SPEC_READY")
+            event = writer.audit("ftic-governance-1")[-1]
+            self.assertEqual(event["from_state"], "CLASSIFIED")
+            self.assertEqual(event["to_state"], "SPEC_READY")
+            self.assertEqual(event["actor"], "PLANNER")
+            self.assertEqual(
+                [binding["content_sha256"] for binding in event["evidence_bindings"]],
+                [
+                    hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+                    hashlib.sha256(result_path.read_bytes()).hexdigest(),
+                ],
+            )
+
+    def test_trusted_result_transition_advance_rejects_human_gate_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "direct policy-authorized transition",
+            ):
+                writer.trusted_task_packet_result_transition_advance(
+                    "ftic-governance-1",
+                    packet_path,
+                    result_path,
+                    evidence_paths=[],
+                    created_at_utc="2026-08-29T06:11:00Z",
+                    human_triggers=["H1_PRODUCT_INTENT"],
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_result_transition_advance_rejects_final_result_drift_without_mutation(
+        self,
+    ) -> None:
+        from acgps import workflow_engine as workflow_engine_module
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before_status = writer.status("ftic-governance-1")
+            before_audit = writer.audit("ftic-governance-1")
+            real_validate = workflow_engine_module.validate_transition_request
+
+            def mutate_after_request_validation(request):
+                outcome = real_validate(request)
+                result_path.write_bytes(
+                    canonical_json_bytes(
+                        dict(agent_result, summary="Mutated before authoritative commit.")
+                    )
+                    + b"\n"
+                )
+                return outcome
+
+            with patch(
+                "acgps.workflow_engine.validate_transition_request",
+                side_effect=mutate_after_request_validation,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "identity changed before trusted transition commit",
+            ):
+                writer.trusted_task_packet_result_transition_advance(
+                    "ftic-governance-1",
+                    packet_path,
+                    result_path,
+                    evidence_paths=[],
+                    created_at_utc="2026-08-29T06:12:00Z",
+                )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_status)
+            self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
     def test_task_packet_verification_rejects_packet_not_derived_from_current_lineage(
         self,
     ) -> None:
