@@ -699,6 +699,84 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_task_packet_handoff_preview_accepts_each_supported_role_without_mutation(
+        self,
+    ) -> None:
+        for role in ("PLANNER", "CODER", "REVIEWER", "VERIFIER"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                _, reader, packet_path, packet = prepare_r2_classified_packet(
+                    state_root,
+                    role=role,
+                )
+                before = tree_bytes(state_root)
+
+                result = reader.trusted_task_packet_handoff_preview(
+                    "ftic-governance-1",
+                    packet_path,
+                )
+
+                self.assertEqual(
+                    result["status"],
+                    "TRUSTED_TASK_PACKET_HANDOFF_PREVIEW",
+                )
+                verification = result["task_packet_verification"]
+                self.assertEqual(verification["status"], "TASK_PACKET_VERIFIED")
+                self.assertEqual(verification["role"], role)
+                self.assertEqual(
+                    verification["packet_sha256"],
+                    hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+                )
+                handoff = result["handoff_preview"]
+                self.assertEqual(handoff["status"], "HANDOFF_PREVIEW")
+                self.assertEqual(handoff["packet"], packet)
+                self.assertEqual(
+                    handoff["packet_sha256"],
+                    verification["packet_sha256"],
+                )
+                self.assertEqual(handoff["controls"]["state_write"], "NOT_PERFORMED")
+                self.assertEqual(handoff["controls"]["model_execution"], "NOT_STARTED")
+                self.assertEqual(handoff["controls"]["process_launch"], "NOT_STARTED")
+                self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_task_packet_handoff_preview_rejects_post_verification_packet_drift(
+        self,
+    ) -> None:
+        from acgps.supervised_handoff import (
+            build_supervised_planner_handoff_preview,
+        )
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, reader, packet_path, _ = prepare_r2_classified_packet(state_root)
+            before_status = writer.status("ftic-governance-1")
+
+            def mutate_after_preview(packet: dict[str, object]) -> dict[str, object]:
+                preview = build_supervised_planner_handoff_preview(packet)
+                packet_path.write_bytes(
+                    canonical_json_bytes(
+                        dict(packet, objective="Mutated after trusted verification.")
+                    )
+                    + b"\n"
+                )
+                return preview
+
+            with patch(
+                "acgps.workflow_engine.build_supervised_planner_handoff_preview",
+                side_effect=mutate_after_preview,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "identity changed during trusted handoff preview",
+                ):
+                    reader.trusted_task_packet_handoff_preview(
+                        "ftic-governance-1",
+                        packet_path,
+                    )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_status)
+
     def test_task_packet_verification_rejects_packet_not_derived_from_current_lineage(
         self,
     ) -> None:

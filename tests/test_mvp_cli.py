@@ -568,6 +568,34 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_trusted_task_packet_handoff_without_state_write(self) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "trusted-handoff-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+        )
+
+        self.assertEqual(result["status"], "TRUSTED_TASK_PACKET_HANDOFF_PREVIEW")
+        self.assertEqual(
+            result["task_packet_verification"]["status"],
+            "TASK_PACKET_VERIFIED",
+        )
+        self.assertEqual(result["task_packet_verification"]["role"], "PLANNER")
+        self.assertEqual(result["handoff_preview"]["status"], "HANDOFF_PREVIEW")
+        self.assertEqual(result["handoff_preview"]["packet"], packet)
+        self.assertEqual(
+            result["handoff_preview"]["controls"]["state_write"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
         packet_path, packet = self._prepare_r2_packet()
         packet_path.write_bytes(

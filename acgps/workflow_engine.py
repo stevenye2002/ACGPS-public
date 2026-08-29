@@ -19,8 +19,11 @@ from acgps.review_adapter import (
 from acgps.supervised_handoff import (
     build_supervised_coder_handoff_preview,
     build_supervised_coder_result_receipt_preview,
+    build_supervised_planner_handoff_preview,
     build_supervised_planner_result_receipt_preview,
+    build_supervised_reviewer_handoff_preview,
     build_supervised_reviewer_result_receipt_preview,
+    build_supervised_verifier_handoff_preview,
     build_supervised_verifier_result_receipt_preview,
 )
 from acgps.task_packets import generate_task_packet
@@ -388,6 +391,51 @@ class WorkflowEngine:
                 "state_write": "NOT_PERFORMED",
                 "workflow_transition": "NOT_PERFORMED",
             },
+        }
+
+    def trusted_task_packet_handoff_preview(
+        self,
+        task_id: str,
+        packet_path: Path,
+    ) -> dict[str, Any]:
+        verification = self.task_packet_verification(task_id, packet_path)
+        packet, packet_snapshot = self._read_canonical_evidence_json(packet_path)
+        builders = {
+            "PLANNER": build_supervised_planner_handoff_preview,
+            "CODER": build_supervised_coder_handoff_preview,
+            "REVIEWER": build_supervised_reviewer_handoff_preview,
+            "VERIFIER": build_supervised_verifier_handoff_preview,
+        }
+        try:
+            handoff_preview = builders[verification["role"]](packet)
+        except KeyError as exc:
+            raise WorkflowEngineError(
+                f"unsupported trusted task packet role: {verification['role']}"
+            ) from exc
+        if (
+            packet["packet_id"] != verification["packet_id"]
+            or packet["role"] != verification["role"]
+            or handoff_preview["packet_sha256"] != verification["packet_sha256"]
+        ):
+            raise WorkflowEngineError(
+                "trusted task packet identity does not match the handoff preview"
+            )
+        final_packet, final_packet_snapshot = self._read_canonical_evidence_json(
+            packet_path
+        )
+        if final_packet != packet or final_packet_snapshot != packet_snapshot:
+            raise WorkflowEngineError(
+                "task packet identity changed during trusted handoff preview"
+            )
+        final_verification = self.task_packet_verification(task_id, packet_path)
+        if final_verification != verification:
+            raise WorkflowEngineError(
+                "trusted task packet identity changed during handoff preview"
+            )
+        return {
+            "status": "TRUSTED_TASK_PACKET_HANDOFF_PREVIEW",
+            "task_packet_verification": final_verification,
+            "handoff_preview": handoff_preview,
         }
 
     def _require_task_state_audit_tail_binding(

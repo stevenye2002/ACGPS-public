@@ -80,6 +80,26 @@ authorize a handoff or workflow transition. Verification proves current trusted
 derivation; it does not establish when or by which process the packet was
 originally created, and it does not validate the contents of `relevant_paths`.
 
+To compose that verification with the existing supervised handoff preview for
+the packet's declared Planner, Coder, Reviewer, or Verifier role:
+
+```powershell
+python -m acgps packet trusted-handoff-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --packet path/to/packet.json
+```
+
+The command verifies the current trusted packet, builds the matching existing
+role handoff preview, then rechecks the packet and complete trusted verification
+identity before returning both results to stdout. It does not write state,
+launch a model or process, authorize the role handoff, or perform a workflow
+transition. As with packet verification, it validates the path syntax in
+`relevant_paths`, not the referenced file contents.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current
