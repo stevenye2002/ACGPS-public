@@ -208,6 +208,40 @@ def _build_parser() -> argparse.ArgumentParser:
     packet_trusted_result_receipt_preview.add_argument("--task-id", required=True)
     packet_trusted_result_receipt_preview.add_argument("--packet", required=True)
     packet_trusted_result_receipt_preview.add_argument("--result", required=True)
+    packet_trusted_result_transition_gate_preview = packet_commands.add_parser(
+        "trusted-result-transition-gate-preview"
+    )
+    _add_project_arguments(
+        packet_trusted_result_transition_gate_preview,
+        include_state=True,
+    )
+    packet_trusted_result_transition_gate_preview.add_argument("--task-id", required=True)
+    packet_trusted_result_transition_gate_preview.add_argument("--packet", required=True)
+    packet_trusted_result_transition_gate_preview.add_argument("--result", required=True)
+    packet_trusted_result_transition_gate_preview.add_argument(
+        "--created-at-utc",
+        required=True,
+    )
+    packet_trusted_result_transition_gate_preview.add_argument(
+        "--evidence",
+        action="append",
+        default=[],
+    )
+    packet_trusted_result_transition_gate_preview.add_argument(
+        "--risk-trigger",
+        action="append",
+        default=[],
+    )
+    packet_trusted_result_transition_gate_preview.add_argument(
+        "--human-trigger",
+        action="append",
+        default=[],
+    )
+    packet_trusted_result_transition_gate_preview.add_argument(
+        "--task-attribute",
+        action="append",
+        default=[],
+    )
 
     decision = commands.add_parser("decision")
     decision_commands = decision.add_subparsers(dest="command", required=True)
@@ -443,6 +477,27 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             args.task_id,
             Path(args.packet),
             Path(args.result),
+        )
+
+    if (
+        args.group == "packet"
+        and args.command == "trusted-result-transition-gate-preview"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_task_packet_result_transition_gate_preview(
+            args.task_id,
+            Path(args.packet),
+            Path(args.result),
+            evidence_paths=[Path(path) for path in args.evidence],
+            created_at_utc=args.created_at_utc,
+            risk_triggers=args.risk_trigger,
+            human_triggers=args.human_trigger,
+            task_attributes=_parse_attributes(args.task_attribute),
         )
 
     if args.group == "decision" and args.command == "pending":

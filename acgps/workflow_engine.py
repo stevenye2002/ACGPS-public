@@ -497,6 +497,63 @@ class WorkflowEngine:
             "result_receipt_preview": receipt_preview,
         }
 
+    def trusted_task_packet_result_transition_gate_preview(
+        self,
+        task_id: str,
+        packet_path: Path,
+        result_path: Path,
+        *,
+        evidence_paths: Iterable[Path],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        receipt = self.trusted_task_packet_result_receipt_preview(
+            task_id,
+            packet_path,
+            result_path,
+        )
+        verification = receipt["task_packet_verification"]
+        role = verification["role"]
+        target = receipt["result_receipt_preview"]["agent_result"][
+            "recommended_next_state"
+        ]
+        source_state = verification["current_state"]
+        if (
+            self._required_transition_actor(source_state, target) != role
+            or self._gate_evidence_kind(source_state, target)
+            != f"{role}_RESULT"
+        ):
+            raise WorkflowEngineError(
+                "trusted result receipt does not match the current transition evidence contract"
+            )
+
+        gate_preview = self.direct_transition_gate_preview(
+            task_id,
+            target,
+            actor=role,
+            evidence_paths=[packet_path, result_path, *evidence_paths],
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        final_receipt = self.trusted_task_packet_result_receipt_preview(
+            task_id,
+            packet_path,
+            result_path,
+        )
+        if final_receipt != receipt:
+            raise WorkflowEngineError(
+                "trusted result receipt identity changed during transition gate preview"
+            )
+        return {
+            "status": "TRUSTED_TASK_PACKET_RESULT_TO_TRANSITION_GATE_PREVIEW",
+            "trusted_result_receipt_preview": final_receipt,
+            "transition_gate_preview": gate_preview,
+        }
+
     def _require_task_state_audit_tail_binding(
         self,
         current: dict[str, Any],

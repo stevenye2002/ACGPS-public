@@ -956,6 +956,203 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(verification_calls, 2)
             self.assertEqual(writer.status("ftic-governance-1"), before_status)
 
+    def test_trusted_result_transition_gate_preview_composes_existing_planner_gate_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before = tree_bytes(state_root)
+
+            preview = reader.trusted_task_packet_result_transition_gate_preview(
+                "ftic-governance-1",
+                packet_path,
+                result_path,
+                evidence_paths=[],
+                created_at_utc="2026-08-29T05:00:00Z",
+            )
+
+            self.assertEqual(
+                preview["status"],
+                "TRUSTED_TASK_PACKET_RESULT_TO_TRANSITION_GATE_PREVIEW",
+            )
+            self.assertEqual(
+                preview["trusted_result_receipt_preview"]["status"],
+                "TRUSTED_TASK_PACKET_RESULT_RECEIPT_PREVIEW",
+            )
+            gate = preview["transition_gate_preview"]
+            self.assertEqual(gate["status"], "DIRECT_TRANSITION_GATE_PREVIEW")
+            self.assertEqual(gate["current_state"], "CLASSIFIED")
+            self.assertEqual(gate["target_state"], "SPEC_READY")
+            self.assertEqual(gate["required_actor"], "PLANNER")
+            self.assertEqual(gate["evidence_status"], "VALIDATED")
+            self.assertEqual(
+                [binding["content_sha256"] for binding in gate["evidence_bindings"]],
+                [
+                    hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+                    hashlib.sha256(result_path.read_bytes()).hexdigest(),
+                ],
+            )
+            self.assertEqual(gate["authorization_status"], "NOT_GRANTED")
+            self.assertEqual(gate["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(gate["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_result_transition_gate_preview_rejects_generic_transition_contract(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="ABANDONED",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "does not match the current transition evidence contract",
+            ):
+                reader.trusted_task_packet_result_transition_gate_preview(
+                    "ftic-governance-1",
+                    packet_path,
+                    result_path,
+                    evidence_paths=[],
+                    created_at_utc="2026-08-29T05:01:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_result_transition_gate_preview_rejects_result_drift_after_gate_validation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, reader, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before_status = writer.status("ftic-governance-1")
+            real_gate_preview = reader.direct_transition_gate_preview
+
+            def mutate_after_gate(*args, **kwargs):
+                gate_preview = real_gate_preview(*args, **kwargs)
+                result_path.write_bytes(
+                    canonical_json_bytes(
+                        dict(agent_result, summary="Mutated after gate validation.")
+                    )
+                    + b"\n"
+                )
+                return gate_preview
+
+            with patch.object(
+                reader,
+                "direct_transition_gate_preview",
+                side_effect=mutate_after_gate,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "identity changed during transition gate preview",
+            ):
+                reader.trusted_task_packet_result_transition_gate_preview(
+                    "ftic-governance-1",
+                    packet_path,
+                    result_path,
+                    evidence_paths=[],
+                    created_at_utc="2026-08-29T05:02:00Z",
+                )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_status)
+
+    def test_trusted_result_transition_gate_preview_preserves_reviewer_evidence_tail(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(writer, hour=6)
+            finding_path = state_root / "review-finding.json"
+            write_review_finding(finding_path, "finding-gate-preview", status="CLOSED")
+            packet_path, result_path, bound_finding_path = (
+                write_reviewer_transition_evidence(
+                    writer,
+                    [finding_path],
+                    target="INTEGRATING",
+                )
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            trusted_packet = generate_task_packet(
+                "REVIEWER",
+                valid_intake(),
+                reader.trusted_classification_policy_result("ftic-governance-1"),
+            )
+            packet_path.write_bytes(canonical_json_bytes(trusted_packet) + b"\n")
+            result_path.write_bytes(
+                canonical_json_bytes(
+                    dict(
+                        valid_reviewer_result(recommended_next_state="INTEGRATING"),
+                        packet_id=trusted_packet["packet_id"],
+                    )
+                )
+                + b"\n"
+            )
+            before = tree_bytes(state_root)
+
+            preview = reader.trusted_task_packet_result_transition_gate_preview(
+                "ftic-governance-1",
+                packet_path,
+                result_path,
+                evidence_paths=[bound_finding_path],
+                created_at_utc="2026-08-29T06:00:00Z",
+            )
+
+            gate = preview["transition_gate_preview"]
+            self.assertEqual(gate["target_state"], "INTEGRATING")
+            self.assertEqual(gate["required_actor"], "REVIEWER")
+            self.assertEqual(
+                [binding["content_sha256"] for binding in gate["evidence_bindings"]],
+                [
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in (packet_path, result_path, bound_finding_path)
+                ],
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
     def test_task_packet_verification_rejects_packet_not_derived_from_current_lineage(
         self,
     ) -> None:

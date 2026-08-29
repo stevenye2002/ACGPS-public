@@ -638,6 +638,53 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(receipt["controls"]["state_write"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_trusted_result_transition_gate_without_state_write(
+        self,
+    ) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        agent_result = dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="PLANNER",
+            changed_files=[],
+            recommended_next_state="SPEC_READY",
+        )
+        result_path = self.state_root / "results" / "planner.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "trusted-result-transition-gate-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+            "--result",
+            str(result_path),
+            "--created-at-utc",
+            "2026-08-29T05:10:00Z",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_TASK_PACKET_RESULT_TO_TRANSITION_GATE_PREVIEW",
+        )
+        self.assertEqual(
+            result["trusted_result_receipt_preview"]["status"],
+            "TRUSTED_TASK_PACKET_RESULT_RECEIPT_PREVIEW",
+        )
+        gate = result["transition_gate_preview"]
+        self.assertEqual(gate["current_state"], "CLASSIFIED")
+        self.assertEqual(gate["target_state"], "SPEC_READY")
+        self.assertEqual(gate["required_actor"], "PLANNER")
+        self.assertEqual(gate["authorization_status"], "NOT_GRANTED")
+        self.assertEqual(gate["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(gate["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
         packet_path, packet = self._prepare_r2_packet()
         packet_path.write_bytes(

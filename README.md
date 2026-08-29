@@ -122,6 +122,34 @@ stdout. It does not write state, launch a model or process, authorize the
 result's recommended next state, or perform a workflow transition. Claimed
 result paths are syntax-validated but their file contents are not inspected.
 
+To compose that trusted receipt with the existing read-only transition gate,
+use the same packet and result and append any evidence already required by the
+role's transition contract:
+
+```powershell
+python -m acgps packet trusted-result-transition-gate-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --packet path/to/packet.json `
+  --result path/to/agent-result.json `
+  --created-at-utc 2026-08-29T05:00:00Z `
+  --evidence path/to/required-review-or-verification-record.json
+```
+
+The command derives the target from `recommended_next_state` and the actor from
+the trusted packet role; neither can be overridden. It accepts only existing
+role-result evidence contracts: Planner planning gates, Coder entry to
+`TASK_REVIEW`, Reviewer outcomes from `TASK_REVIEW`, and Verifier outcomes that
+already require a Verifier result. Reviewer findings or verification records
+remain explicit ordered `--evidence` arguments. Generic, handoff-only, closure,
+release-candidate, and `WAITING_HUMAN` paths fail closed. Before returning, the
+command rechecks the complete trusted receipt identity. Its nested gate result
+still reports `authorization_status: NOT_GRANTED` and performs no state write,
+model or process launch, or workflow transition.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current
