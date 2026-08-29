@@ -892,6 +892,70 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(writer.status("ftic-governance-1"), before_status)
 
+    def test_trusted_task_packet_result_receipt_preview_rejects_result_drift_during_final_packet_verification(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, reader, packet_path, packet = prepare_r2_classified_packet(
+                state_root
+            )
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before_status = writer.status("ftic-governance-1")
+            real_task_packet_verification = reader.task_packet_verification
+            verification_calls = 0
+
+            def mutate_after_final_packet_verification(
+                task_id: str,
+                current_packet_path: Path,
+            ) -> dict[str, object]:
+                nonlocal verification_calls
+                verification_calls += 1
+                verification = real_task_packet_verification(
+                    task_id,
+                    current_packet_path,
+                )
+                if verification_calls == 2:
+                    result_path.write_bytes(
+                        canonical_json_bytes(
+                            dict(
+                                agent_result,
+                                summary="Mutated during final packet verification.",
+                            )
+                        )
+                        + b"\n"
+                    )
+                return verification
+
+            with patch.object(
+                reader,
+                "task_packet_verification",
+                side_effect=mutate_after_final_packet_verification,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "agent result identity changed during trusted result receipt preview",
+                ):
+                    reader.trusted_task_packet_result_receipt_preview(
+                        "ftic-governance-1",
+                        packet_path,
+                        result_path,
+                    )
+
+            self.assertEqual(verification_calls, 2)
+            self.assertEqual(writer.status("ftic-governance-1"), before_status)
+
     def test_task_packet_verification_rejects_packet_not_derived_from_current_lineage(
         self,
     ) -> None:

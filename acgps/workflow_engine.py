@@ -479,17 +479,17 @@ class WorkflowEngine:
             raise WorkflowEngineError(
                 "task packet identity changed during trusted result receipt preview"
             )
+        final_verification = self.task_packet_verification(task_id, packet_path)
+        if final_verification != verification:
+            raise WorkflowEngineError(
+                "trusted task packet identity changed during result receipt preview"
+            )
         final_result, final_result_snapshot = self._read_canonical_evidence_json(
             result_path
         )
         if final_result != agent_result or final_result_snapshot != result_snapshot:
             raise WorkflowEngineError(
                 "agent result identity changed during trusted result receipt preview"
-            )
-        final_verification = self.task_packet_verification(task_id, packet_path)
-        if final_verification != verification:
-            raise WorkflowEngineError(
-                "trusted task packet identity changed during result receipt preview"
             )
         return {
             "status": "TRUSTED_TASK_PACKET_RESULT_RECEIPT_PREVIEW",
