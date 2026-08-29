@@ -1191,6 +1191,149 @@ class WorkflowEngineTests(unittest.TestCase):
                 ],
             )
 
+    def test_trusted_result_transition_commit_verification_revalidates_tail_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            writer.trusted_task_packet_result_transition_advance(
+                "ftic-governance-1",
+                packet_path,
+                result_path,
+                evidence_paths=[],
+                created_at_utc="2026-08-29T06:13:00Z",
+            )
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).trusted_task_packet_result_transition_commit_verification(
+                "ftic-governance-1"
+            )
+
+            event = writer.audit("ftic-governance-1")[-1]
+            self.assertEqual(
+                result["status"],
+                "TRUSTED_TASK_PACKET_RESULT_TRANSITION_COMMIT_VERIFIED",
+            )
+            self.assertEqual(result["transition_id"], event["transition_id"])
+            self.assertEqual(result["from_state"], "CLASSIFIED")
+            self.assertEqual(result["to_state"], "SPEC_READY")
+            self.assertEqual(result["actor"], "PLANNER")
+            self.assertEqual(result["packet_id"], packet["packet_id"])
+            self.assertEqual(result["role"], "PLANNER")
+            self.assertEqual(result["evidence_count"], 2)
+            self.assertEqual(result["additional_evidence_count"], 0)
+            self.assertEqual(
+                result["packet_content_sha256"],
+                hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                result["result_content_sha256"],
+                hashlib.sha256(result_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(result["audit_head_event_id"], event["event_id"])
+            self.assertEqual(result["audit_head_hash"], event["event_hash"])
+            self.assertEqual(result["state_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(result["audit_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(result["evidence_identity_status"], "REVALIDATED")
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_result_transition_commit_verification_rejects_non_result_tail(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "authoritative audit tail is not a supported trusted Packet/Result transition",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).trusted_task_packet_result_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_result_transition_commit_verification_rejects_bound_result_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, packet_path, packet = prepare_r2_classified_packet(state_root)
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            writer.trusted_task_packet_result_transition_advance(
+                "ftic-governance-1",
+                packet_path,
+                result_path,
+                evidence_paths=[],
+                created_at_utc="2026-08-29T06:14:00Z",
+            )
+            before_state = writer.status("ftic-governance-1")
+            before_audit = writer.audit("ftic-governance-1")
+            result_path.write_bytes(
+                canonical_json_bytes(dict(agent_result, summary="Tampered after commit."))
+                + b"\n"
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "bound evidence binding content changed",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).trusted_task_packet_result_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_state)
+            self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
     def test_trusted_result_transition_advance_rejects_human_gate_without_mutation(
         self,
     ) -> None:

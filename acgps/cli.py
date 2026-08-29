@@ -276,6 +276,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
     )
+    packet_trusted_result_transition_commit_verify = packet_commands.add_parser(
+        "trusted-result-transition-commit-verify"
+    )
+    _add_project_arguments(
+        packet_trusted_result_transition_commit_verify,
+        include_state=True,
+    )
+    packet_trusted_result_transition_commit_verify.add_argument(
+        "--task-id",
+        required=True,
+    )
 
     decision = commands.add_parser("decision")
     decision_commands = decision.add_subparsers(dest="command", required=True)
@@ -548,6 +559,18 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             human_triggers=args.human_trigger,
             task_attributes=_parse_attributes(args.task_attribute),
         )
+
+    if (
+        args.group == "packet"
+        and args.command == "trusted-result-transition-commit-verify"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_task_packet_result_transition_commit_verification(args.task_id)
 
     if args.group == "decision" and args.command == "pending":
         decisions = _read_only_decision_queue(Path(args.state_root)).list_pending()

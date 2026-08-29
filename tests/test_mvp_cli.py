@@ -734,6 +734,56 @@ class MVPCLITests(unittest.TestCase):
             ],
         )
 
+    def test_cli_verifies_committed_trusted_result_transition_without_state_writes(
+        self,
+    ) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        agent_result = dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="PLANNER",
+            changed_files=[],
+            recommended_next_state="SPEC_READY",
+        )
+        result_path = self.state_root / "results" / "planner.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+        self._run(
+            "packet",
+            "trusted-result-transition-advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+            "--result",
+            str(result_path),
+            "--created-at-utc",
+            "2026-08-29T06:21:00Z",
+        )
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "trusted-result-transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_TASK_PACKET_RESULT_TRANSITION_COMMIT_VERIFIED",
+        )
+        self.assertEqual(result["from_state"], "CLASSIFIED")
+        self.assertEqual(result["to_state"], "SPEC_READY")
+        self.assertEqual(result["actor"], "PLANNER")
+        self.assertEqual(result["packet_id"], packet["packet_id"])
+        self.assertEqual(result["evidence_count"], 2)
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
         packet_path, packet = self._prepare_r2_packet()
         packet_path.write_bytes(

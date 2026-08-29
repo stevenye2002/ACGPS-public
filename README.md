@@ -177,6 +177,26 @@ state/audit commit. A human Gate or any identity drift fails before that commit.
 The command does not launch a model or external process; its only product state
 write is the accepted transition's existing workflow state/audit transaction.
 
+To revalidate the resulting authoritative audit tail without changing workflow
+state, use:
+
+```powershell
+python -m acgps packet trusted-result-transition-commit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The verifier requires the current authoritative audit tail itself to be a
+supported Planner, Coder, Reviewer, or Verifier Packet/Result transition. It
+derives the complete evidence set from that tail, revalidates every bound path,
+size, SHA-256, Packet/Result contract, target recommendation, and additional
+Gate evidence, then rechecks task-state and audit-lineage identity before
+returning JSON to stdout. It does not search older transitions, write state,
+launch a model or process, or authorize another transition.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current

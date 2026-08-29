@@ -686,6 +686,144 @@ class WorkflowEngine:
             final_identity_check=require_final_trusted_identity,
         )
 
+    def trusted_task_packet_result_transition_commit_verification(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        tail = trusted_lineage[-1]
+        if tail["event_type"] != "TRANSITION_ACCEPTED":
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a supported trusted Packet/Result transition"
+            )
+
+        evidence_kind = self._gate_evidence_kind(
+            tail["from_state"],
+            tail["to_state"],
+        )
+        expected_role = {
+            "PLANNER_RESULT": "PLANNER",
+            "CODER_RESULT": "CODER",
+            "REVIEWER_RESULT": "REVIEWER",
+            "VERIFIER_RESULT": "VERIFIER",
+        }.get(evidence_kind)
+        if (
+            expected_role is None
+            or tail["actor"] != expected_role
+            or self._required_transition_actor(
+                tail["from_state"],
+                tail["to_state"],
+            )
+            != expected_role
+        ):
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a supported trusted Packet/Result transition"
+            )
+
+        bindings = tail["evidence_bindings"]
+        if len(bindings) < 2:
+            raise WorkflowEngineError(
+                "authoritative Packet/Result transition evidence is incomplete"
+            )
+        evidence_paths = [self._bound_evidence_path(binding) for binding in bindings]
+        packet, packet_snapshot = self._read_bound_canonical_evidence_json(bindings[0])
+        agent_result, result_snapshot = self._read_bound_canonical_evidence_json(
+            bindings[1]
+        )
+        receipt = self.trusted_task_packet_result_receipt_preview(
+            task_id,
+            evidence_paths[0],
+            evidence_paths[1],
+        )
+        verification = receipt["task_packet_verification"]
+        receipt_preview = receipt["result_receipt_preview"]
+        if (
+            packet["role"] != expected_role
+            or verification["role"] != expected_role
+            or verification["packet_id"] != packet["packet_id"]
+            or receipt_preview["agent_result"] != agent_result
+            or agent_result["recommended_next_state"] != tail["to_state"]
+        ):
+            raise WorkflowEngineError(
+                "authoritative Packet/Result transition identity or recommendation is invalid"
+            )
+
+        expected_snapshots = [
+            (
+                binding["path"],
+                binding["size_bytes"],
+                binding["content_sha256"],
+            )
+            for binding in bindings
+        ]
+        validated_snapshots = self._validate_gate_evidence(
+            tail["to_state"],
+            evidence_paths,
+            current,
+            source_state=tail["from_state"],
+        )
+        if validated_snapshots != expected_snapshots:
+            raise WorkflowEngineError(
+                "authoritative Packet/Result transition evidence does not match its audit bindings"
+            )
+
+        final_receipt = self.trusted_task_packet_result_receipt_preview(
+            task_id,
+            evidence_paths[0],
+            evidence_paths[1],
+        )
+        final_snapshots = self._validate_gate_evidence(
+            tail["to_state"],
+            evidence_paths,
+            current,
+            source_state=tail["from_state"],
+        )
+        final_current = self.status(task_id)
+        final_lineage = self._trusted_audit_lineage(final_current)
+        self._require_task_state_audit_tail_binding(final_current, final_lineage)
+        if (
+            final_receipt != receipt
+            or final_snapshots != expected_snapshots
+            or final_current != current
+            or self._canonical_sha(final_lineage) != trusted_lineage_identity
+            or final_lineage[-1] != tail
+        ):
+            raise WorkflowEngineError(
+                "trusted transition commit identity changed during verification"
+            )
+
+        return {
+            "status": "TRUSTED_TASK_PACKET_RESULT_TRANSITION_COMMIT_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "transition_id": tail["transition_id"],
+            "from_state": tail["from_state"],
+            "to_state": tail["to_state"],
+            "actor": tail["actor"],
+            "packet_id": packet["packet_id"],
+            "role": packet["role"],
+            "packet_content_sha256": packet_snapshot[2],
+            "result_content_sha256": result_snapshot[2],
+            "evidence_count": len(bindings),
+            "additional_evidence_count": len(bindings) - 2,
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "evidence_identity_status": "REVALIDATED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _require_task_state_audit_tail_binding(
         self,
         current: dict[str, Any],
@@ -2709,11 +2847,11 @@ class WorkflowEngine:
     def _bound_evidence_path(self, binding: dict[str, Any]) -> Path:
         logical_path = binding.get("path")
         if binding.get("source") != "path" or not isinstance(logical_path, str):
-            raise WorkflowEngineError("fix-cycle evidence binding must reference a path")
+            raise WorkflowEngineError("bound evidence binding must reference a path")
         prefix, separator, relative = logical_path.partition("/")
         roots = {"project": self.project_root, "state": self.state_root}
         if not separator or prefix not in roots or not relative:
-            raise WorkflowEngineError("fix-cycle evidence binding path is invalid")
+            raise WorkflowEngineError("bound evidence binding path is invalid")
         rebound_logical, resolved = self._evidence_location(
             roots[prefix] / Path(relative)
         )
@@ -2724,7 +2862,7 @@ class WorkflowEngine:
             or binding.get("content_sha256")
             != hashlib.sha256(payload).hexdigest()
         ):
-            raise WorkflowEngineError("fix-cycle evidence binding content changed")
+            raise WorkflowEngineError("bound evidence binding content changed")
         return resolved
 
     @staticmethod
