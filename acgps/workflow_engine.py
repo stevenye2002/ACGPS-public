@@ -206,6 +206,59 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_classification_policy_result(self, task_id: str) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        classification_events = [
+            event
+            for event in trusted_lineage
+            if event["event_type"] == "TRANSITION_ACCEPTED"
+            and event["to_state"] == "CLASSIFIED"
+        ]
+        if len(classification_events) != 1:
+            raise WorkflowEngineError(
+                "task packet generation requires exactly one trusted accepted CLASSIFIED policy"
+            )
+
+        policy_binding = classification_events[0]["policy_evaluation_binding"]
+        if (
+            not isinstance(policy_binding, dict)
+            or policy_binding.get("source") != "embedded"
+            or not isinstance(policy_binding.get("embedded_record"), dict)
+        ):
+            raise WorkflowEngineError(
+                "trusted accepted CLASSIFIED policy must be an embedded policy result"
+            )
+        policy_result = policy_binding["embedded_record"]
+        try:
+            validate_contract("policy_evaluation_result", policy_result, mode="runtime")
+        except ContractValidationError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            policy_result["project_id"] != current["project_id"]
+            or policy_result["task_id"] != current["task_id"]
+            or self._canonical_sha(policy_result) != policy_binding["result_sha256"]
+            or policy_result["policy_bundle_digest"]
+            != policy_binding["policy_bundle_digest"]
+            or policy_result["result"]["fail_closed"]
+            or not policy_result["result"]["decision_emitted"]
+        ):
+            raise WorkflowEngineError(
+                "trusted accepted CLASSIFIED policy identity or executable result is invalid"
+            )
+
+        if self.status(task_id) != current:
+            raise WorkflowEngineError(
+                "task state identity changed during classification policy lookup"
+            )
+        final_lineage = self._trusted_audit_lineage(current)
+        if self._canonical_sha(final_lineage) != trusted_lineage_identity:
+            raise WorkflowEngineError(
+                "audit lineage identity changed during classification policy lookup"
+            )
+        return policy_result
+
     def next_action_preview(self, task_id: str) -> dict[str, Any]:
         current = self.status(task_id)
         self._trusted_audit_lineage(current)

@@ -34,6 +34,30 @@ python scripts/check.py setup
 python scripts/check.py full
 ```
 
+## Policy-bound task packet generation
+
+After a task has reached `CLASSIFIED`, an operator can generate a role packet
+from the unique accepted classification policy in the trusted audit lineage:
+
+```powershell
+python -m acgps packet generate `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --role PLANNER `
+  --created-at-utc 2026-08-29T00:00:00Z `
+  --output packets/planner.json
+```
+
+The command reads workflow state and audit lineage without mutation and copies
+the accepted policy's required skills and mandatory gates into the packet. It
+fails closed before writing the requested output when the classification
+policy is missing, ambiguous, corrupt, or changes identity during lookup. The
+only runtime write is the requested packet beneath `state-root`; the packet
+contract does not claim a separately self-verifying policy-lineage identity.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current

@@ -377,6 +377,116 @@ class MVPCLITests(unittest.TestCase):
             "ftic-v1",
         ]
 
+    def test_cli_packet_generate_rejects_before_classification_without_output(self) -> None:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        output_path = self.state_root / "packets" / "planner.json"
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-29T03:00:00Z",
+            "--output",
+            str(output_path),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("exactly one trusted accepted CLASSIFIED policy", result["error"])
+        self.assertFalse(output_path.exists())
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_packet_generate_preserves_trusted_accepted_r2_policy(self) -> None:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "READY_FOR_CLASSIFICATION",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-29T03:01:00Z",
+            "--evidence",
+            str(evidence),
+        )
+        self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "CLASSIFIED",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-29T03:02:00Z",
+            "--evidence",
+            str(evidence),
+            "--risk-trigger",
+            "public_api",
+            "--task-attribute",
+            "change_type=review_artifact",
+        )
+        output_path = self.state_root / "packets" / "planner.json"
+
+        packet = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-29T03:03:00Z",
+            "--output",
+            str(output_path),
+        )
+
+        self.assertEqual(
+            packet["required_skills"],
+            [
+                "superpowers_writing_plans",
+                "superpowers_requesting_code_review",
+                "superpowers_verification_before_completion",
+            ],
+        )
+        self.assertEqual(
+            packet["required_evidence"],
+            [
+                "architecture",
+                "plan",
+                "broad_verification",
+                "high_capability_review",
+                "rc_evidence",
+            ],
+        )
+        self.assertEqual(json.loads(output_path.read_text(encoding="utf-8")), packet)
+
     def _waiting_human_resolution(self) -> tuple[dict[str, object], Path]:
         self._run(
             "task",
@@ -1493,6 +1603,31 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(state["current_state"], "DRAFT")
 
+        classification_evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, (target, actor) in enumerate(
+            (
+                ("READY_FOR_CLASSIFICATION", "PLANNER"),
+                ("CLASSIFIED", "CONTROLLER"),
+            ),
+            start=1,
+        ):
+            state = self._run(
+                "task",
+                "advance",
+                *self._engine_arguments(),
+                "--task-id",
+                "ftic-governance-1",
+                "--to-state",
+                target,
+                "--actor",
+                actor,
+                "--created-at-utc",
+                f"2026-08-23T00:{index:02d}:00Z",
+                "--evidence",
+                str(classification_evidence),
+            )
+            self.assertEqual(state["current_state"], target)
+
         packet_path = self.state_root / "packets" / "planner.json"
         packet = self._run(
             "packet",
@@ -1622,8 +1757,6 @@ class MVPCLITests(unittest.TestCase):
         rollback.write_text("Delete the local runtime state directory.\n", encoding="utf-8")
 
         transitions = [
-            ("READY_FOR_CLASSIFICATION", "PLANNER", [source]),
-            ("CLASSIFIED", "CONTROLLER", [source]),
             ("SPEC_READY", "PLANNER", [packet_path, planner_result_paths["SPEC_READY"]]),
             ("PLAN_READY", "PLANNER", [packet_path, planner_result_paths["PLAN_READY"]]),
             ("IMPLEMENTING", "CODER", [coder_packet_path]),
@@ -1639,7 +1772,7 @@ class MVPCLITests(unittest.TestCase):
                 [verifier_packet_path, verifier_result_path, verification],
             ),
         ]
-        for index, (target, actor, evidence_paths) in enumerate(transitions, start=1):
+        for index, (target, actor, evidence_paths) in enumerate(transitions, start=3):
             if target in {"TASK_REVIEW", "INTEGRATING", "VERIFIED"}:
                 before = self._run(
                     "task",

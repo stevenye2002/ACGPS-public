@@ -8,7 +8,7 @@ from typing import Any
 
 from acgps.contracts import validate_contract
 from acgps.human_decisions import DecisionQueue
-from acgps.policy import evaluate_policy, load_policy_bundle, validate_project_registration
+from acgps.policy import load_policy_bundle, validate_project_registration
 from acgps.review_adapter import build_release_candidate_manifest, verify_release_candidate_manifest
 from acgps.supervised_handoff import (
     build_supervised_coder_handoff_preview,
@@ -374,27 +374,16 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.group == "packet" and args.command == "generate":
-        engine = _engine(args)
-        state = engine.status(args.task_id)
+        engine = WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        )
         intake_path = safe_state_path(Path(args.state_root), f"tasks/{args.task_id}/intake.json")
         intake = _read_mapping(intake_path)
-        policy_result = evaluate_policy(
-            {
-                "schema_version": 1,
-                "evaluation_id": f"packet-{args.task_id}-{args.role.casefold()}",
-                "project_id": state["project_id"],
-                "task_id": args.task_id,
-                "input": {
-                    "current_state": state["current_state"],
-                    "risk_triggers": [],
-                    "human_triggers": [],
-                    "task_attributes": {},
-                    "project_profile_id": args.profile_id,
-                },
-                "created_at_utc": args.created_at_utc,
-            },
-            bundle=engine.bundle,
-        )
+        policy_result = engine.trusted_classification_policy_result(args.task_id)
         packet = generate_task_packet(args.role, intake, policy_result)
         write_state_atomic(_state_output_path(Path(args.state_root), Path(args.output)), packet)
         return packet

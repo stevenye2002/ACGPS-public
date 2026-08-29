@@ -468,6 +468,176 @@ def start_recovery_generation(engine, state: dict[str, object], *, created_at_ut
 
 
 class WorkflowEngineTests(unittest.TestCase):
+    def test_trusted_classification_policy_result_preserves_accepted_r2_routing_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            writer.advance(
+                "ftic-governance-1",
+                "READY_FOR_CLASSIFICATION",
+                actor="CONTROLLER",
+                evidence_paths=[evidence],
+                created_at_utc="2026-08-29T00:01:00Z",
+            )
+            writer.advance(
+                "ftic-governance-1",
+                "CLASSIFIED",
+                actor="CONTROLLER",
+                evidence_paths=[evidence],
+                risk_triggers=["public_api"],
+                task_attributes={"change_type": "review_artifact"},
+                created_at_utc="2026-08-29T00:02:00Z",
+            )
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            policy_result = reader.trusted_classification_policy_result(
+                "ftic-governance-1"
+            )
+
+            self.assertEqual(policy_result["result"]["risk_level"], "R2")
+            self.assertEqual(
+                policy_result["result"]["required_skills"],
+                [
+                    "superpowers_writing_plans",
+                    "superpowers_requesting_code_review",
+                    "superpowers_verification_before_completion",
+                ],
+            )
+            self.assertEqual(
+                policy_result["result"]["mandatory_gates"],
+                [
+                    "architecture",
+                    "plan",
+                    "broad_verification",
+                    "high_capability_review",
+                    "rc_evidence",
+                ],
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_classification_policy_result_rejects_before_classification_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            before = tree_bytes(state_root)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "exactly one trusted accepted CLASSIFIED policy",
+            ):
+                reader.trusted_classification_policy_result("ftic-governance-1")
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_classification_policy_result_rejects_task_state_identity_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                writer.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[evidence],
+                    created_at_utc=f"2026-08-29T01:0{minute}:00Z",
+                )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            initial = reader.status("ftic-governance-1")
+            changed = dict(initial, updated_at_utc="2026-08-29T01:03:00Z")
+
+            with patch.object(reader, "status", side_effect=[initial, changed]):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "task state identity changed during classification policy lookup",
+                ):
+                    reader.trusted_classification_policy_result("ftic-governance-1")
+
+    def test_trusted_classification_policy_result_rejects_audit_lineage_identity_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                writer.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[evidence],
+                    created_at_utc=f"2026-08-29T02:0{minute}:00Z",
+                )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            current = reader.status("ftic-governance-1")
+            initial_lineage = reader._trusted_audit_lineage(current)
+            changed_lineage = [*initial_lineage, dict(initial_lineage[-1], sequence=4)]
+
+            with (
+                patch.object(reader, "status", side_effect=[current, current]),
+                patch.object(
+                    reader,
+                    "_trusted_audit_lineage",
+                    side_effect=[initial_lineage, changed_lineage],
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "audit lineage identity changed during classification policy lookup",
+                ):
+                    reader.trusted_classification_policy_result("ftic-governance-1")
+
     def test_audit_lineage_verification_derives_multi_generation_identity_without_mutation(
         self,
     ) -> None:
