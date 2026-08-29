@@ -777,6 +777,121 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(writer.status("ftic-governance-1"), before_status)
 
+    def test_trusted_task_packet_result_receipt_preview_accepts_each_supported_role_without_mutation(
+        self,
+    ) -> None:
+        recommended_states = {
+            "PLANNER": "SPEC_READY",
+            "CODER": "TASK_REVIEW",
+            "REVIEWER": "INTEGRATING",
+            "VERIFIER": "VERIFIED",
+        }
+        for role, recommended_state in recommended_states.items():
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                _, reader, packet_path, packet = prepare_r2_classified_packet(
+                    state_root,
+                    role=role,
+                )
+                agent_result = dict(
+                    valid_agent_result(),
+                    packet_id=packet["packet_id"],
+                    role=role,
+                    changed_files=[],
+                    recommended_next_state=recommended_state,
+                )
+                result_path = state_root / "results" / f"{role.casefold()}.json"
+                result_path.parent.mkdir(parents=True)
+                result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+                before = tree_bytes(state_root)
+
+                result = reader.trusted_task_packet_result_receipt_preview(
+                    "ftic-governance-1",
+                    packet_path,
+                    result_path,
+                )
+
+                self.assertEqual(
+                    result["status"],
+                    "TRUSTED_TASK_PACKET_RESULT_RECEIPT_PREVIEW",
+                )
+                verification = result["task_packet_verification"]
+                self.assertEqual(verification["status"], "TASK_PACKET_VERIFIED")
+                self.assertEqual(verification["role"], role)
+                receipt = result["result_receipt_preview"]
+                self.assertEqual(receipt["status"], "RESULT_RECEIPT_PREVIEW")
+                self.assertEqual(receipt["packet_id"], packet["packet_id"])
+                self.assertEqual(
+                    receipt["packet_sha256"],
+                    verification["packet_sha256"],
+                )
+                self.assertEqual(receipt["agent_result"], agent_result)
+                self.assertEqual(
+                    receipt["agent_result_sha256"],
+                    hashlib.sha256(canonical_json_bytes(agent_result)).hexdigest(),
+                )
+                self.assertEqual(receipt["controls"]["state_write"], "NOT_PERFORMED")
+                self.assertEqual(receipt["controls"]["model_execution"], "NOT_STARTED")
+                self.assertEqual(receipt["controls"]["process_launch"], "NOT_STARTED")
+                self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_task_packet_result_receipt_preview_rejects_post_validation_result_drift(
+        self,
+    ) -> None:
+        from acgps.supervised_handoff import (
+            build_supervised_planner_result_receipt_preview,
+        )
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, reader, packet_path, packet = prepare_r2_classified_packet(
+                state_root
+            )
+            agent_result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="PLANNER",
+                changed_files=[],
+                recommended_next_state="SPEC_READY",
+            )
+            result_path = state_root / "results" / "planner.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+            before_status = writer.status("ftic-governance-1")
+
+            def mutate_after_preview(
+                packet_record: dict[str, object],
+                result_record: dict[str, object],
+            ) -> dict[str, object]:
+                preview = build_supervised_planner_result_receipt_preview(
+                    packet_record,
+                    result_record,
+                )
+                result_path.write_bytes(
+                    canonical_json_bytes(
+                        dict(result_record, summary="Mutated after receipt validation.")
+                    )
+                    + b"\n"
+                )
+                return preview
+
+            with patch(
+                "acgps.workflow_engine.build_supervised_planner_result_receipt_preview",
+                side_effect=mutate_after_preview,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "agent result identity changed during trusted result receipt preview",
+                ):
+                    reader.trusted_task_packet_result_receipt_preview(
+                        "ftic-governance-1",
+                        packet_path,
+                        result_path,
+                    )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_status)
+
     def test_task_packet_verification_rejects_packet_not_derived_from_current_lineage(
         self,
     ) -> None:

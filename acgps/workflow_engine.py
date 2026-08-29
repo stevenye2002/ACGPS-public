@@ -438,6 +438,65 @@ class WorkflowEngine:
             "handoff_preview": handoff_preview,
         }
 
+    def trusted_task_packet_result_receipt_preview(
+        self,
+        task_id: str,
+        packet_path: Path,
+        result_path: Path,
+    ) -> dict[str, Any]:
+        verification = self.task_packet_verification(task_id, packet_path)
+        packet, packet_snapshot = self._read_canonical_evidence_json(packet_path)
+        agent_result, result_snapshot = self._read_canonical_evidence_json(
+            result_path
+        )
+        builders = {
+            "PLANNER": build_supervised_planner_result_receipt_preview,
+            "CODER": build_supervised_coder_result_receipt_preview,
+            "REVIEWER": build_supervised_reviewer_result_receipt_preview,
+            "VERIFIER": build_supervised_verifier_result_receipt_preview,
+        }
+        try:
+            receipt_preview = builders[verification["role"]](packet, agent_result)
+        except KeyError as exc:
+            raise WorkflowEngineError(
+                f"unsupported trusted task packet role: {verification['role']}"
+            ) from exc
+        if (
+            packet["packet_id"] != verification["packet_id"]
+            or packet["role"] != verification["role"]
+            or receipt_preview["packet_id"] != verification["packet_id"]
+            or receipt_preview["packet_sha256"] != verification["packet_sha256"]
+            or receipt_preview["agent_result_sha256"]
+            != self._canonical_sha(agent_result)
+        ):
+            raise WorkflowEngineError(
+                "trusted task packet or agent result identity does not match the receipt preview"
+            )
+        final_packet, final_packet_snapshot = self._read_canonical_evidence_json(
+            packet_path
+        )
+        if final_packet != packet or final_packet_snapshot != packet_snapshot:
+            raise WorkflowEngineError(
+                "task packet identity changed during trusted result receipt preview"
+            )
+        final_result, final_result_snapshot = self._read_canonical_evidence_json(
+            result_path
+        )
+        if final_result != agent_result or final_result_snapshot != result_snapshot:
+            raise WorkflowEngineError(
+                "agent result identity changed during trusted result receipt preview"
+            )
+        final_verification = self.task_packet_verification(task_id, packet_path)
+        if final_verification != verification:
+            raise WorkflowEngineError(
+                "trusted task packet identity changed during result receipt preview"
+            )
+        return {
+            "status": "TRUSTED_TASK_PACKET_RESULT_RECEIPT_PREVIEW",
+            "task_packet_verification": final_verification,
+            "result_receipt_preview": receipt_preview,
+        }
+
     def _require_task_state_audit_tail_binding(
         self,
         current: dict[str, Any],

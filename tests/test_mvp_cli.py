@@ -596,6 +596,48 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_trusted_task_packet_result_receipt_without_state_write(
+        self,
+    ) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        agent_result = dict(
+            valid_agent_result(),
+            packet_id=packet["packet_id"],
+            role="PLANNER",
+            changed_files=[],
+            recommended_next_state="SPEC_READY",
+        )
+        result_path = self.state_root / "results" / "planner.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_bytes(canonical_json_bytes(agent_result) + b"\n")
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "trusted-result-receipt-preview",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+            "--result",
+            str(result_path),
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_TASK_PACKET_RESULT_RECEIPT_PREVIEW",
+        )
+        self.assertEqual(
+            result["task_packet_verification"]["status"],
+            "TASK_PACKET_VERIFIED",
+        )
+        receipt = result["result_receipt_preview"]
+        self.assertEqual(receipt["status"], "RESULT_RECEIPT_PREVIEW")
+        self.assertEqual(receipt["agent_result"], agent_result)
+        self.assertEqual(receipt["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
         packet_path, packet = self._prepare_r2_packet()
         packet_path.write_bytes(

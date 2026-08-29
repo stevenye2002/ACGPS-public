@@ -100,6 +100,28 @@ launch a model or process, authorize the role handoff, or perform a workflow
 transition. As with packet verification, it validates the path syntax in
 `relevant_paths`, not the referenced file contents.
 
+After the supervised role returns an `AGENT_RESULT`, an operator can compose
+the same current-trusted packet verification with the matching existing result
+receipt preview:
+
+```powershell
+python -m acgps packet trusted-result-receipt-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --packet path/to/packet.json `
+  --result path/to/agent-result.json
+```
+
+The command canonical-reads both records, selects the Planner, Coder, Reviewer,
+or Verifier receipt validator from the packet role, and rechecks both record
+identities and the complete trusted packet verification before returning to
+stdout. It does not write state, launch a model or process, authorize the
+result's recommended next state, or perform a workflow transition. Claimed
+result paths are syntax-validated but their file contents are not inspected.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current

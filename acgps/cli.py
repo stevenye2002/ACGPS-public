@@ -201,6 +201,13 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_project_arguments(packet_trusted_handoff_preview, include_state=True)
     packet_trusted_handoff_preview.add_argument("--task-id", required=True)
     packet_trusted_handoff_preview.add_argument("--packet", required=True)
+    packet_trusted_result_receipt_preview = packet_commands.add_parser(
+        "trusted-result-receipt-preview"
+    )
+    _add_project_arguments(packet_trusted_result_receipt_preview, include_state=True)
+    packet_trusted_result_receipt_preview.add_argument("--task-id", required=True)
+    packet_trusted_result_receipt_preview.add_argument("--packet", required=True)
+    packet_trusted_result_receipt_preview.add_argument("--result", required=True)
 
     decision = commands.add_parser("decision")
     decision_commands = decision.add_subparsers(dest="command", required=True)
@@ -423,6 +430,19 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         ).trusted_task_packet_handoff_preview(
             args.task_id,
             Path(args.packet),
+        )
+
+    if args.group == "packet" and args.command == "trusted-result-receipt-preview":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_task_packet_result_receipt_preview(
+            args.task_id,
+            Path(args.packet),
+            Path(args.result),
         )
 
     if args.group == "decision" and args.command == "pending":
