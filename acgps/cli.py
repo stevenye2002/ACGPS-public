@@ -191,6 +191,10 @@ def _build_parser() -> argparse.ArgumentParser:
     packet_generate.add_argument("--role", required=True)
     packet_generate.add_argument("--created-at-utc", required=True)
     packet_generate.add_argument("--output", required=True)
+    packet_verify = packet_commands.add_parser("verify")
+    _add_project_arguments(packet_verify, include_state=True)
+    packet_verify.add_argument("--task-id", required=True)
+    packet_verify.add_argument("--packet", required=True)
 
     decision = commands.add_parser("decision")
     decision_commands = decision.add_subparsers(dest="command", required=True)
@@ -390,6 +394,18 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         packet = generate_task_packet(args.role, intake, policy_result)
         write_state_atomic(_state_output_path(Path(args.state_root), Path(args.output)), packet)
         return packet
+
+    if args.group == "packet" and args.command == "verify":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).task_packet_verification(
+            args.task_id,
+            Path(args.packet),
+        )
 
     if args.group == "decision" and args.command == "pending":
         decisions = _read_only_decision_queue(Path(args.state_root)).list_pending()

@@ -34,6 +34,49 @@ def tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
+def prepare_r2_classified_packet(
+    state_root: Path,
+    *,
+    role: str = "PLANNER",
+):
+    from acgps.workflow_engine import WorkflowEngine
+
+    writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+    writer.intake(valid_intake())
+    evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+    writer.advance(
+        "ftic-governance-1",
+        "READY_FOR_CLASSIFICATION",
+        actor="CONTROLLER",
+        evidence_paths=[evidence],
+        created_at_utc="2026-08-29T04:01:00Z",
+    )
+    writer.advance(
+        "ftic-governance-1",
+        "CLASSIFIED",
+        actor="CONTROLLER",
+        evidence_paths=[evidence],
+        risk_triggers=["public_api"],
+        task_attributes={"change_type": "review_artifact"},
+        created_at_utc="2026-08-29T04:02:00Z",
+    )
+    reader = WorkflowEngine(
+        ROOT,
+        state_root,
+        MVP_FTIC_ROOT,
+        "ftic-v1",
+        read_only=True,
+    )
+    policy_result = reader.trusted_classification_policy_result(
+        "ftic-governance-1"
+    )
+    packet = generate_task_packet(role, valid_intake(), policy_result)
+    packet_path = state_root / "packets" / f"{role.casefold()}.json"
+    packet_path.parent.mkdir(parents=True)
+    packet_path.write_bytes(canonical_json_bytes(packet) + b"\n")
+    return writer, reader, packet_path, packet
+
+
 def write_task_review_evidence(engine) -> list[Path]:
     evidence_dir = engine.state_root / "task-review-evidence"
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -628,6 +671,186 @@ class WorkflowEngineTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(tree_bytes(state_root), before)
+
+    def test_task_packet_verification_matches_current_trusted_lineage_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, packet = prepare_r2_classified_packet(state_root)
+            before = tree_bytes(state_root)
+
+            result = reader.task_packet_verification(
+                "ftic-governance-1",
+                packet_path,
+            )
+
+            self.assertEqual(result["status"], "TASK_PACKET_VERIFIED")
+            self.assertEqual(result["task_id"], "ftic-governance-1")
+            self.assertEqual(result["role"], "PLANNER")
+            self.assertEqual(
+                result["packet_sha256"],
+                hashlib.sha256(canonical_json_bytes(packet)).hexdigest(),
+            )
+            self.assertEqual(result["packet_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(result["intake_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(result["state_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(result["audit_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_task_packet_verification_rejects_packet_not_derived_from_current_lineage(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, packet = prepare_r2_classified_packet(state_root)
+            packet_path.write_bytes(
+                canonical_json_bytes(
+                    dict(packet, objective="Replace the trusted task objective.")
+                )
+                + b"\n"
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "does not match the current trusted task policy and intake lineage",
+            ):
+                reader.task_packet_verification("ftic-governance-1", packet_path)
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_task_packet_verification_rejects_packet_identity_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, packet = prepare_r2_classified_packet(state_root)
+            trusted_lookup = reader.trusted_classification_policy_result
+
+            def mutate_packet_after_lookup(task_id, *, intake=None):
+                policy_result = trusted_lookup(task_id, intake=intake)
+                packet_path.write_bytes(
+                    canonical_json_bytes(
+                        dict(packet, objective="Drift after trusted lookup.")
+                    )
+                    + b"\n"
+                )
+                return policy_result
+
+            with patch.object(
+                reader,
+                "trusted_classification_policy_result",
+                side_effect=mutate_packet_after_lookup,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "task packet identity changed during task packet verification",
+                ):
+                    reader.task_packet_verification("ftic-governance-1", packet_path)
+
+    def test_task_packet_verification_rejects_intake_identity_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, _ = prepare_r2_classified_packet(state_root)
+            trusted_lookup = reader.trusted_classification_policy_result
+            intake_path = state_root / "tasks" / "ftic-governance-1" / "intake.json"
+
+            def mutate_intake_after_lookup(task_id, *, intake=None):
+                policy_result = trusted_lookup(task_id, intake=intake)
+                changed_intake = dict(
+                    intake,
+                    requested_outcome="Drift after trusted lookup.",
+                )
+                intake_path.write_bytes(canonical_json_bytes(changed_intake) + b"\n")
+                return policy_result
+
+            with patch.object(
+                reader,
+                "trusted_classification_policy_result",
+                side_effect=mutate_intake_after_lookup,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "task intake identity changed during task packet verification",
+                ):
+                    reader.task_packet_verification("ftic-governance-1", packet_path)
+
+    def test_task_packet_verification_rejects_final_task_state_identity_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, reader, packet_path, _ = prepare_r2_classified_packet(state_root)
+            trusted_lookup = reader.trusted_classification_policy_result
+
+            def mutate_state_after_lookup(task_id, *, intake=None):
+                policy_result = trusted_lookup(task_id, intake=intake)
+                current = writer.status(task_id)
+                writer.store.write_task_state(
+                    dict(current, updated_at_utc="2026-08-29T04:03:00Z")
+                )
+                return policy_result
+
+            with patch.object(
+                reader,
+                "trusted_classification_policy_result",
+                side_effect=mutate_state_after_lookup,
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "task state identity changed during task packet verification",
+                ):
+                    reader.task_packet_verification("ftic-governance-1", packet_path)
+
+    def test_task_packet_verification_rejects_final_audit_lineage_identity_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            _, reader, packet_path, _ = prepare_r2_classified_packet(state_root)
+            trusted_lookup = reader.trusted_classification_policy_result
+            trusted_lineage = reader._trusted_audit_lineage
+            lookup_complete = False
+
+            def mark_lookup_complete(task_id, *, intake=None):
+                nonlocal lookup_complete
+                policy_result = trusted_lookup(task_id, intake=intake)
+                lookup_complete = True
+                return policy_result
+
+            def drift_after_lookup(current):
+                lineage = trusted_lineage(current)
+                if not lookup_complete:
+                    return lineage
+                return [*lineage[:-1], dict(lineage[-1], sequence=999)]
+
+            with (
+                patch.object(
+                    reader,
+                    "trusted_classification_policy_result",
+                    side_effect=mark_lookup_complete,
+                ),
+                patch.object(
+                    reader,
+                    "_trusted_audit_lineage",
+                    side_effect=drift_after_lookup,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "audit lineage identity changed during task packet verification",
+                ):
+                    reader.task_packet_verification("ftic-governance-1", packet_path)
 
     def test_trusted_classification_policy_result_rejects_before_classification_without_mutation(
         self,

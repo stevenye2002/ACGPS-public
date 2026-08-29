@@ -23,6 +23,7 @@ from acgps.supervised_handoff import (
     build_supervised_reviewer_result_receipt_preview,
     build_supervised_verifier_result_receipt_preview,
 )
+from acgps.task_packets import generate_task_packet
 from acgps.workflow_contracts import (
     canonical_json_bytes,
     validate_task_initialization_request,
@@ -303,6 +304,91 @@ class WorkflowEngine:
                 "audit lineage identity changed during classification policy lookup"
             )
         return policy_result
+
+    def task_packet_verification(
+        self,
+        task_id: str,
+        packet_path: Path,
+    ) -> dict[str, Any]:
+        packet, packet_snapshot = self._read_canonical_evidence_json(packet_path)
+        try:
+            validate_contract("agent_task_contract", packet, mode="runtime")
+        except ContractValidationError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        if (
+            packet["task_id"] != current["task_id"]
+            or packet["project_id"] != current["project_id"]
+        ):
+            raise WorkflowEngineError(
+                "task packet project_id or task_id does not match the current task"
+            )
+
+        intake_path = safe_state_path(
+            self.state_root,
+            f"tasks/{current['task_id']}/intake.json",
+        )
+        intake, intake_snapshot = self._read_canonical_evidence_json(intake_path)
+        policy_result = self.trusted_classification_policy_result(
+            task_id,
+            intake=intake,
+        )
+        expected_packet = generate_task_packet(packet["role"], intake, policy_result)
+        if packet != expected_packet:
+            raise WorkflowEngineError(
+                "task packet does not match the current trusted task policy and intake lineage"
+            )
+
+        final_packet, final_packet_snapshot = self._read_canonical_evidence_json(
+            packet_path
+        )
+        if final_packet != packet or final_packet_snapshot != packet_snapshot:
+            raise WorkflowEngineError(
+                "task packet identity changed during task packet verification"
+            )
+        final_intake, final_intake_snapshot = self._read_canonical_evidence_json(
+            intake_path
+        )
+        if final_intake != intake or final_intake_snapshot != intake_snapshot:
+            raise WorkflowEngineError(
+                "task intake identity changed during task packet verification"
+            )
+        if self.status(task_id) != current:
+            raise WorkflowEngineError(
+                "task state identity changed during task packet verification"
+            )
+        final_lineage = self._trusted_audit_lineage(current)
+        if self._canonical_sha(final_lineage) != trusted_lineage_identity:
+            raise WorkflowEngineError(
+                "audit lineage identity changed during task packet verification"
+            )
+
+        return {
+            "status": "TASK_PACKET_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "packet_id": packet["packet_id"],
+            "role": packet["role"],
+            "packet_sha256": self._canonical_sha(packet),
+            "packet_identity_status": "UNCHANGED_DURING_QUERY",
+            "intake_identity_status": "UNCHANGED_DURING_QUERY",
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
 
     def _require_task_state_audit_tail_binding(
         self,

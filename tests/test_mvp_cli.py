@@ -377,6 +377,65 @@ class MVPCLITests(unittest.TestCase):
             "ftic-v1",
         ]
 
+    def _prepare_r2_packet(self) -> tuple[Path, dict[str, object]]:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "READY_FOR_CLASSIFICATION",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-29T04:11:00Z",
+            "--evidence",
+            str(evidence),
+        )
+        self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "CLASSIFIED",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-29T04:12:00Z",
+            "--evidence",
+            str(evidence),
+            "--risk-trigger",
+            "public_api",
+            "--task-attribute",
+            "change_type=review_artifact",
+        )
+        packet_path = self.state_root / "packets" / "planner.json"
+        packet = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-29T04:13:00Z",
+            "--output",
+            str(packet_path),
+        )
+        return packet_path, packet
+
     def test_cli_packet_generate_rejects_before_classification_without_output(self) -> None:
         self._run(
             "task",
@@ -486,6 +545,56 @@ class MVPCLITests(unittest.TestCase):
             ],
         )
         self.assertEqual(json.loads(output_path.read_text(encoding="utf-8")), packet)
+
+    def test_cli_packet_verify_matches_current_trusted_lineage_without_state_write(
+        self,
+    ) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+        )
+
+        self.assertEqual(result["status"], "TASK_PACKET_VERIFIED")
+        self.assertEqual(result["packet_id"], packet["packet_id"])
+        self.assertEqual(result["role"], "PLANNER")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
+        packet_path, packet = self._prepare_r2_packet()
+        packet_path.write_bytes(
+            canonical_json_bytes(
+                dict(packet, objective="Replace the trusted task objective.")
+            )
+            + b"\n"
+        )
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--packet",
+            str(packet_path),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn(
+            "does not match the current trusted task policy and intake lineage",
+            result["error"],
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
 
     def test_cli_packet_generate_rejects_same_identity_mutated_intake_without_output(self) -> None:
         self._run(

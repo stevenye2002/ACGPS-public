@@ -58,6 +58,28 @@ policy is missing, ambiguous, corrupt, or changes identity during lookup. The
 only runtime write is the requested packet beneath `state-root`; the packet
 contract does not claim a separately self-verifying policy-lineage identity.
 
+An operator can later verify that a canonical task packet is exactly the packet
+currently derived from the trusted task intake and unique accepted
+classification policy:
+
+```powershell
+python -m acgps packet verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID `
+  --packet path/to/packet.json
+```
+
+The verifier reads the packet and intake as canonical JSON snapshots, validates
+the existing packet contract, regenerates the expected packet, and requires an
+exact match. Before returning it rechecks the packet, intake, task-state, and
+audit-lineage identities. It writes only its JSON result to stdout and does not
+authorize a handoff or workflow transition. Verification proves current trusted
+derivation; it does not establish when or by which process the packet was
+originally created, and it does not validate the contents of `relevant_paths`.
+
 ## Read-only task audit verification
 
 An operator can verify the complete trusted audit lineage bound to the current
