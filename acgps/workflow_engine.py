@@ -28,7 +28,14 @@ from acgps.workflow_contracts import (
     validate_task_initialization_request,
     validate_transition_request,
 )
-from acgps.workflow_store import WorkflowStore, WorkflowStoreError, safe_state_path, write_state_atomic
+from acgps.workflow_store import (
+    WorkflowStore,
+    WorkflowStoreError,
+    _idempotency_key_digest,
+    _validated_idempotency_row,
+    safe_state_path,
+    write_state_atomic,
+)
 
 
 class WorkflowEngineError(ValueError):
@@ -149,7 +156,16 @@ class WorkflowEngine:
             "pending_decision_id": None,
             "updated_at_utc": created_at,
         }
+        initialization_result = self._initialization_result(initialization, event)
+        idempotency_record = self._initialization_idempotency_record(
+            initialization,
+            initialization_result,
+        )
         try:
+            self.store.write_idempotency_record_once(
+                idempotency_record,
+                canonical_request=initialization,
+            )
             self.store.commit_task_state_and_audit(event, state)
             write_state_atomic(
                 safe_state_path(self.state_root, f"tasks/{intake['task_id']}/intake.json"),
@@ -206,10 +222,16 @@ class WorkflowEngine:
             },
         }
 
-    def trusted_classification_policy_result(self, task_id: str) -> dict[str, Any]:
+    def trusted_classification_policy_result(
+        self,
+        task_id: str,
+        *,
+        intake: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         current = self.status(task_id)
         trusted_lineage = self._trusted_audit_lineage(current)
         trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
         classification_events = [
             event
             for event in trusted_lineage
@@ -248,6 +270,18 @@ class WorkflowEngine:
                 "trusted accepted CLASSIFIED policy identity or executable result is invalid"
             )
 
+        if intake is None:
+            intake_path = safe_state_path(
+                self.state_root,
+                f"tasks/{current['task_id']}/intake.json",
+            )
+            intake, _ = self._read_canonical_evidence_json(intake_path)
+        self._require_trusted_initialization_proof(
+            current,
+            trusted_lineage,
+            intake,
+        )
+
         if self.status(task_id) != current:
             raise WorkflowEngineError(
                 "task state identity changed during classification policy lookup"
@@ -258,6 +292,110 @@ class WorkflowEngine:
                 "audit lineage identity changed during classification policy lookup"
             )
         return policy_result
+
+    @staticmethod
+    def _require_task_state_audit_tail_binding(
+        current: dict[str, Any],
+        trusted_lineage: list[dict[str, Any]],
+    ) -> None:
+        if not trusted_lineage:
+            raise WorkflowEngineError("trusted audit lineage is empty")
+        try:
+            WorkflowStore._validate_state_event_pair(trusted_lineage[-1], current)
+        except WorkflowStoreError as exc:
+            raise WorkflowEngineError(
+                "task state does not match the trusted audit tail"
+            ) from exc
+        if current["updated_at_utc"] != trusted_lineage[-1]["created_at_utc"]:
+            raise WorkflowEngineError("task state does not match the trusted audit tail")
+
+    def _require_trusted_initialization_proof(
+        self,
+        current: dict[str, Any],
+        trusted_lineage: list[dict[str, Any]],
+        intake: dict[str, Any],
+    ) -> None:
+        try:
+            validate_contract("task_intake", intake, mode="runtime")
+        except ContractValidationError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            intake["task_id"] != current["task_id"]
+            or intake["project_id"] != current["project_id"]
+        ):
+            raise WorkflowEngineError(
+                "task intake does not match the trusted initialization proof"
+            )
+        creation_events = [
+            event for event in trusted_lineage if event["event_type"] == "TASK_CREATED"
+        ]
+        if len(creation_events) != 1:
+            raise WorkflowEngineError("trusted initialization audit event is missing")
+        creation_event = creation_events[0]
+        token = self._task_token(current["task_id"])
+        initialization = {
+            "schema_version": 1,
+            "initialization_id": f"init-{token}",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "initial_state": "DRAFT",
+            "actor": creation_event["actor"],
+            "idempotency_key": f"intake-{token}",
+            "task_intake_binding": self._embedded_evidence_binding(
+                binding_id=f"intake-{token}",
+                evidence_kind="task_intake",
+                record=intake,
+                created_at_utc=intake["created_at_utc"],
+            ),
+            "created_at_utc": intake["created_at_utc"],
+        }
+        outcome = validate_task_initialization_request(initialization)
+        if not outcome.valid:
+            raise WorkflowEngineError(outcome.issues[0].message)
+        expected_result = self._initialization_result(initialization, creation_event)
+        expected_record = self._initialization_idempotency_record(
+            initialization,
+            expected_result,
+        )
+        try:
+            actual_record = self._read_idempotency_record(
+                current["task_id"],
+                "INITIALIZATION",
+                initialization["idempotency_key"],
+            )
+        except WorkflowStoreError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if actual_record is None:
+            raise WorkflowEngineError("trusted initialization proof is missing")
+        if actual_record != expected_record:
+            raise WorkflowEngineError(
+                "task intake does not match the trusted initialization proof"
+            )
+
+    def _read_idempotency_record(
+        self,
+        task_id: str,
+        operation_kind: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        key_digest = _idempotency_key_digest(idempotency_key)
+        with self.store._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT identity_json, record_json, canonical_request_json, idempotency_key
+                FROM idempotency_records
+                WHERE task_id = ? AND operation_kind = ? AND idempotency_key_sha256 = ?
+                """,
+                (task_id, operation_kind, key_digest),
+            ).fetchone()
+        if row is None:
+            return None
+        return _validated_idempotency_row(
+            row,
+            task_id=task_id,
+            operation_kind=operation_kind,
+            idempotency_key=idempotency_key,
+        )
 
     def next_action_preview(self, task_id: str) -> dict[str, Any]:
         current = self.status(task_id)
@@ -2004,6 +2142,54 @@ class WorkflowEngine:
             "content_sha256": digest,
             "size_bytes": len(payload),
             "created_at_utc": created_at_utc,
+        }
+
+    def _initialization_result(
+        self,
+        initialization: dict[str, Any],
+        event: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "initialization_id": initialization["initialization_id"],
+            "task_id": initialization["task_id"],
+            "project_id": initialization["project_id"],
+            "accepted": True,
+            "resulting_state": "DRAFT",
+            "audit_event_id": event["event_id"],
+            "audit_generation": event["generation"],
+            "audit_sequence": event["sequence"],
+            "fail_closed": False,
+            "error_code": None,
+            "issues": [],
+            "idempotent_replay": False,
+            "created_at_utc": event["created_at_utc"],
+        }
+
+    def _initialization_idempotency_record(
+        self,
+        initialization: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_identity = {
+            key: value
+            for key, value in initialization.items()
+            if not key.endswith("_at_utc")
+        }
+        return {
+            "schema_version": 1,
+            "operation_kind": "INITIALIZATION",
+            "operation_id": initialization["initialization_id"],
+            "task_id": initialization["task_id"],
+            "idempotency_key": initialization["idempotency_key"],
+            "request_fingerprint": self._canonical_sha(request_identity),
+            "result_fingerprint": self._canonical_sha(result),
+            "canonical_result": result,
+            "transaction_path": (
+                f"state/transactions/{initialization['task_id']}"
+                f"/initialization-{initialization['initialization_id']}"
+            ),
+            "created_at_utc": initialization["created_at_utc"],
         }
 
     def _read_canonical_evidence_json(

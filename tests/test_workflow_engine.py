@@ -468,6 +468,57 @@ def start_recovery_generation(engine, state: dict[str, object], *, created_at_ut
 
 
 class WorkflowEngineTests(unittest.TestCase):
+    def test_intake_persists_initialization_idempotency_proof(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+        from acgps.workflow_store import read_idempotency_record
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+
+            writer.intake(valid_intake())
+
+            token = hashlib.sha256(b"ftic-governance-1").hexdigest()[:16]
+            record = read_idempotency_record(
+                state_root,
+                "ftic-governance-1",
+                "INITIALIZATION",
+                f"intake-{token}",
+            )
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record["operation_id"], f"init-{token}")
+            self.assertEqual(record["canonical_result"]["audit_event_id"], f"evt-{token}-0001")
+            self.assertEqual(record["canonical_result"]["audit_generation"], 1)
+            self.assertEqual(record["canonical_result"]["audit_sequence"], 1)
+
+    def test_intake_partial_failure_cannot_rebind_proof_to_changed_content(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            original = valid_intake()
+            with patch(
+                "acgps.workflow_engine.write_state_atomic",
+                side_effect=OSError("simulated intake publication failure"),
+            ):
+                with self.assertRaisesRegex(
+                    OSError,
+                    "simulated intake publication failure",
+                ):
+                    writer.intake(original)
+            changed = dict(
+                original,
+                requested_outcome="Replace the original task objective.",
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "WORKFLOW_IDEMPOTENCY_CONFLICT",
+            ):
+                writer.intake(changed)
+
     def test_trusted_classification_policy_result_preserves_accepted_r2_routing_without_mutation(
         self,
     ) -> None:
@@ -553,6 +604,79 @@ class WorkflowEngineTests(unittest.TestCase):
                 reader.trusted_classification_policy_result("ftic-governance-1")
 
             self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_classification_policy_result_rejects_state_not_bound_to_audit_tail(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                writer.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[evidence],
+                    created_at_utc=f"2026-08-29T00:1{minute}:00Z",
+                )
+            current = writer.status("ftic-governance-1")
+            writer.store.write_task_state(dict(current, current_state="SPEC_READY"))
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "task state does not match the trusted audit tail",
+            ):
+                reader.trusted_classification_policy_result("ftic-governance-1")
+
+    def test_trusted_classification_policy_result_rejects_missing_initialization_proof(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            with patch.object(writer.store, "write_idempotency_record_once"):
+                writer.intake(valid_intake())
+            evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                writer.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[evidence],
+                    created_at_utc=f"2026-08-29T00:2{minute}:00Z",
+                )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted initialization proof is missing",
+            ):
+                reader.trusted_classification_policy_result("ftic-governance-1")
 
     def test_trusted_classification_policy_result_rejects_task_state_identity_drift(
         self,

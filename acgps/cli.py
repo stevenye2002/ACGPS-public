@@ -383,7 +383,10 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         )
         intake_path = safe_state_path(Path(args.state_root), f"tasks/{args.task_id}/intake.json")
         intake = _read_mapping(intake_path)
-        policy_result = engine.trusted_classification_policy_result(args.task_id)
+        policy_result = engine.trusted_classification_policy_result(
+            args.task_id,
+            intake=intake,
+        )
         packet = generate_task_packet(args.role, intake, policy_result)
         write_state_atomic(_state_output_path(Path(args.state_root), Path(args.output)), packet)
         return packet

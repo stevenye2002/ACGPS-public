@@ -487,6 +487,58 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(json.loads(output_path.read_text(encoding="utf-8")), packet)
 
+    def test_cli_packet_generate_rejects_same_identity_mutated_intake_without_output(self) -> None:
+        self._run(
+            "task",
+            "intake",
+            *self._engine_arguments(),
+            "--intake",
+            str(self.FIXTURE_ROOT / "task-intake.yaml"),
+        )
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            self._run(
+                "task",
+                "advance",
+                *self._engine_arguments(),
+                "--task-id",
+                "ftic-governance-1",
+                "--to-state",
+                target,
+                "--actor",
+                "CONTROLLER",
+                "--created-at-utc",
+                f"2026-08-29T03:1{index}:00Z",
+                "--evidence",
+                str(evidence),
+            )
+        intake_path = self.state_root / "tasks" / "ftic-governance-1" / "intake.json"
+        mutated = json.loads(intake_path.read_text(encoding="utf-8"))
+        mutated["requested_outcome"] = "Replace the accepted task objective."
+        intake_path.write_bytes(canonical_json_bytes(mutated) + b"\n")
+        output_path = self.state_root / "packets" / "mutated-planner.json"
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-29T03:13:00Z",
+            "--output",
+            str(output_path),
+            expected_exit=2,
+        )
+
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("task intake does not match the trusted initialization proof", result["error"])
+        self.assertFalse(output_path.exists())
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def _waiting_human_resolution(self) -> tuple[dict[str, object], Path]:
         self._run(
             "task",
