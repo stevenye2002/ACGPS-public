@@ -162,6 +162,17 @@ class WorkflowEngine:
             initialization_result,
         )
         try:
+            existing_proof = self._read_idempotency_record(
+                intake["task_id"],
+                "INITIALIZATION",
+                initialization["idempotency_key"],
+            )
+            if existing_proof is None and self._authoritative_task_exists(
+                intake["task_id"]
+            ):
+                raise WorkflowEngineError(
+                    "WORKFLOW_AUDIT_CORRUPT: historical task initialization proof is missing"
+                )
             self.store.write_idempotency_record_once(
                 idempotency_record,
                 canonical_request=initialization,
@@ -293,20 +304,32 @@ class WorkflowEngine:
             )
         return policy_result
 
-    @staticmethod
     def _require_task_state_audit_tail_binding(
+        self,
         current: dict[str, Any],
         trusted_lineage: list[dict[str, Any]],
     ) -> None:
         if not trusted_lineage:
             raise WorkflowEngineError("trusted audit lineage is empty")
+        tail = trusted_lineage[-1]
         try:
-            WorkflowStore._validate_state_event_pair(trusted_lineage[-1], current)
+            WorkflowStore._validate_state_event_pair(tail, current)
         except WorkflowStoreError as exc:
             raise WorkflowEngineError(
                 "task state does not match the trusted audit tail"
             ) from exc
-        if current["updated_at_utc"] != trusted_lineage[-1]["created_at_utc"]:
+        expected_pending_decision_id = None
+        if (
+            tail["event_type"] == "TRANSITION_ACCEPTED"
+            and tail["to_state"] == "WAITING_HUMAN"
+        ):
+            expected_pending_decision_id = (
+                f"decision-{self._task_token(tail['task_id'])}-{tail['sequence']:04d}"
+            )
+        if (
+            current["pending_decision_id"] != expected_pending_decision_id
+            or current["updated_at_utc"] != tail["created_at_utc"]
+        ):
             raise WorkflowEngineError("task state does not match the trusted audit tail")
 
     def _require_trusted_initialization_proof(
@@ -396,6 +419,14 @@ class WorkflowEngine:
             operation_kind=operation_kind,
             idempotency_key=idempotency_key,
         )
+
+    def _authoritative_task_exists(self, task_id: str) -> bool:
+        with self.store._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM task_states WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        return row is not None
 
     def next_action_preview(self, task_id: str) -> dict[str, Any]:
         current = self.status(task_id)

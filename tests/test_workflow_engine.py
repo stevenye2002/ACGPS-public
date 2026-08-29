@@ -519,6 +519,56 @@ class WorkflowEngineTests(unittest.TestCase):
             ):
                 writer.intake(changed)
 
+    def test_intake_rejects_historical_task_without_backfilling_initialization_proof(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+        from acgps.workflow_store import read_idempotency_record
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            intake = valid_intake()
+            with patch.object(writer.store, "write_idempotency_record_once"):
+                writer.intake(intake)
+            evidence = MVP_FTIC_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+            for minute, target in enumerate(
+                ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+                start=1,
+            ):
+                writer.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="CONTROLLER",
+                    evidence_paths=[evidence],
+                    created_at_utc=f"2026-08-29T00:3{minute}:00Z",
+                )
+            token = hashlib.sha256(b"ftic-governance-1").hexdigest()[:16]
+            key = f"intake-{token}"
+            self.assertIsNone(
+                read_idempotency_record(
+                    state_root,
+                    "ftic-governance-1",
+                    "INITIALIZATION",
+                    key,
+                )
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "WORKFLOW_AUDIT_CORRUPT",
+            ):
+                writer.intake(intake)
+
+            self.assertIsNone(
+                read_idempotency_record(
+                    state_root,
+                    "ftic-governance-1",
+                    "INITIALIZATION",
+                    key,
+                )
+            )
+
     def test_trusted_classification_policy_result_preserves_accepted_r2_routing_without_mutation(
         self,
     ) -> None:
@@ -634,6 +684,38 @@ class WorkflowEngineTests(unittest.TestCase):
                 MVP_FTIC_ROOT,
                 "ftic-v1",
                 read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "task state does not match the trusted audit tail",
+            ):
+                reader.trusted_classification_policy_result("ftic-governance-1")
+
+    def test_trusted_classification_policy_result_rejects_pending_decision_state_tail_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=9)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            self.assertEqual(
+                reader.trusted_classification_policy_result("ftic-governance-1")["result"][
+                    "risk_level"
+                ],
+                "R0",
+            )
+            writer.store.write_task_state(
+                dict(waiting, pending_decision_id="decision-foreign-valid")
             )
 
             with self.assertRaisesRegex(
