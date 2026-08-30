@@ -1566,6 +1566,109 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_committed_coder_resume_transition_without_state_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        planner_packet_path, planner_packet = self._prepare_r2_packet()
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        for index, target in enumerate(("SPEC_READY", "PLAN_READY"), start=1):
+            planner_result_path = (
+                self.state_root / "results" / f"planner-{target.casefold()}.json"
+            )
+            planner_result_path.parent.mkdir(parents=True, exist_ok=True)
+            planner_result_path.write_bytes(
+                canonical_json_bytes(
+                    dict(
+                        valid_agent_result(),
+                        packet_id=planner_packet["packet_id"],
+                        role="PLANNER",
+                        changed_files=[],
+                        created_files=[],
+                        recommended_next_state=target,
+                    )
+                )
+                + b"\n"
+            )
+            engine.advance(
+                "ftic-governance-1",
+                target,
+                actor="PLANNER",
+                evidence_paths=[planner_packet_path, planner_result_path],
+                created_at_utc=f"2026-08-29T19:0{index}:00Z",
+            )
+        coder_packet_path = self.state_root / "packets" / "coder-resume.json"
+        self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "CODER",
+            "--created-at-utc",
+            "2026-08-29T19:03:00Z",
+            "--output",
+            str(coder_packet_path),
+        )
+        waiting = engine.advance(
+            "ftic-governance-1",
+            "IMPLEMENTING",
+            actor="CONTROLLER",
+            evidence_paths=[coder_packet_path],
+            human_triggers=["H1_PRODUCT_INTENT"],
+            created_at_utc="2026-08-29T19:04:00Z",
+        )
+        resolution = {
+            "schema_version": 1,
+            "decision_id": waiting["pending_decision_id"],
+            "project_id": "FTIC",
+            "task_id": "ftic-governance-1",
+            "selected_option": "RESUME",
+            "resolved_by": "human_owner",
+            "resolved_at_utc": "2026-08-29T19:05:00Z",
+            "rationale": "Continue the approved supervised Coder workflow.",
+            "evidence_paths": [],
+            "resume_state": "IMPLEMENTING",
+            "status": "RESOLVED",
+        }
+        engine.advance(
+            "ftic-governance-1",
+            "IMPLEMENTING",
+            actor="CODER",
+            evidence_paths=[coder_packet_path],
+            decision_resolution=resolution,
+            created_at_utc="2026-08-29T19:06:00Z",
+        )
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "task",
+            "resume-transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "WAITING_HUMAN_RESUME_TRANSITION_COMMIT_VERIFIED",
+        )
+        self.assertEqual(result["source_state_before_human_gate"], "PLAN_READY")
+        self.assertEqual(result["from_state"], "WAITING_HUMAN")
+        self.assertEqual(result["to_state"], "IMPLEMENTING")
+        self.assertEqual(result["actor"], "CODER")
+        self.assertEqual(result["evidence_kind"], "CODER_HANDOFF")
+        self.assertEqual(result["decision_id"], resolution["decision_id"])
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_rejects_resolution_preview_for_non_authoritative_pending_request(self) -> None:
         from acgps.human_decisions import DecisionQueue
         from acgps.workflow_store import WorkflowStore

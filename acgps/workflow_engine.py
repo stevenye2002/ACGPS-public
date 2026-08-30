@@ -1004,6 +1004,14 @@ class WorkflowEngine:
                 "committed resume transition is not bound to its WAITING_HUMAN pause"
             )
         source_state = pause_event["from_state"]
+        if tail["to_state"] not in self.bundle.workflow["transitions"].get(
+            source_state,
+            [],
+        ):
+            raise WorkflowEngineError(
+                f"resume target {tail['to_state']} is not legal from original state "
+                f"{source_state}"
+            )
         evidence_kind = self._gate_evidence_kind(source_state, tail["to_state"])
         if tail["actor"] != self._required_transition_actor(
             source_state,
@@ -1029,16 +1037,51 @@ class WorkflowEngine:
         request_record, request_snapshot = self._read_canonical_evidence_json(
             request_path
         )
+        pause_policy_result = pause_event["policy_evaluation_binding"][
+            "embedded_record"
+        ]["result"]
+        pause_trigger_items = list(pause_policy_result["required_human_triggers"])
+        if not pause_trigger_items:
+            raise WorkflowEngineError(
+                "authoritative WAITING_HUMAN pause is missing its human trigger"
+            )
+        expected_request = {
+            "schema_version": 1,
+            "decision_id": expected_decision_id,
+            "project_id": current["project_id"],
+            "task_id": current["task_id"],
+            "stage": tail["to_state"],
+            "risk_level": pause_policy_result["risk_level"],
+            "trigger": pause_trigger_items[0],
+            "question": f"Authorize transition to {tail['to_state']}?",
+            "recommended_option": "RESUME",
+            "recommendation_rationale": (
+                "Resume only within the existing bounded task."
+            ),
+            "options": [
+                {
+                    "id": "RESUME",
+                    "description": f"Resume at {tail['to_state']}.",
+                    "benefits": ["continues the approved task"],
+                    "costs": [],
+                    "risks": [],
+                    "reversible": True,
+                }
+            ],
+            "default_without_response": "PAUSE",
+            "evidence_paths": [
+                binding["path"] for binding in pause_event["evidence_bindings"]
+            ],
+            "created_at_utc": pause_event["created_at_utc"],
+            "status": "PENDING",
+        }
+        if request != expected_request or request_record != expected_request:
+            raise WorkflowEngineError(
+                "pending decision request does not match the authoritative pause"
+            )
         if (
             decision_binding["decision_id"] != expected_decision_id
             or request["decision_id"] != expected_decision_id
-            or request_record != request
-            or request["project_id"] != current["project_id"]
-            or request["task_id"] != current["task_id"]
-            or request["stage"] != tail["to_state"]
-            or request["created_at_utc"] != pause_event["created_at_utc"]
-            or request["evidence_paths"]
-            != [binding["path"] for binding in pause_event["evidence_bindings"]]
             or not self.store.has_committed_decision_resolution(resolution)
         ):
             raise WorkflowEngineError(
@@ -1062,11 +1105,19 @@ class WorkflowEngine:
             )
             for binding in bindings
         ]
-        validated_snapshots = self._validate_gate_evidence(
-            tail["to_state"],
-            evidence_paths,
-            current,
-            source_state=source_state,
+        validated_snapshots = (
+            self._validate_coder_handoff_evidence(
+                evidence_paths,
+                current,
+                require_latest_transition=False,
+            )
+            if evidence_kind == "CODER_HANDOFF"
+            else self._validate_gate_evidence(
+                tail["to_state"],
+                evidence_paths,
+                current,
+                source_state=source_state,
+            )
         )
         if validated_snapshots != expected_snapshots:
             raise WorkflowEngineError(
@@ -1081,11 +1132,19 @@ class WorkflowEngine:
             final_resolved_record, final_resolved_snapshot = (
                 self._read_canonical_evidence_json(resolved_path)
             )
-            final_validated_snapshots = self._validate_gate_evidence(
-                tail["to_state"],
-                evidence_paths,
-                current,
-                source_state=source_state,
+            final_validated_snapshots = (
+                self._validate_coder_handoff_evidence(
+                    evidence_paths,
+                    current,
+                    require_latest_transition=False,
+                )
+                if evidence_kind == "CODER_HANDOFF"
+                else self._validate_gate_evidence(
+                    tail["to_state"],
+                    evidence_paths,
+                    current,
+                    source_state=source_state,
+                )
             )
             final_committed_resolution = (
                 self.store.has_committed_decision_resolution(resolution)
@@ -1101,8 +1160,8 @@ class WorkflowEngine:
                 "WAITING_HUMAN resume transition commit identity changed during verification"
             ) from exc
         if (
-            final_request != request
-            or final_request_record != request_record
+            final_request != expected_request
+            or final_request_record != expected_request
             or final_request_snapshot != request_snapshot
             or final_resolved_record != resolved_record
             or final_resolved_snapshot != resolved_snapshot
@@ -2409,6 +2468,8 @@ class WorkflowEngine:
         self,
         paths: list[Path],
         current: dict[str, Any],
+        *,
+        require_latest_transition: bool = True,
     ) -> list[tuple[str, int, str]]:
         if len(paths) != 1:
             raise WorkflowEngineError(
@@ -2429,7 +2490,7 @@ class WorkflowEngine:
         self._validate_coder_packet_against_frozen_plan(
             packet,
             current,
-            require_latest_transition=True,
+            require_latest_transition=require_latest_transition,
         )
         return [packet_snapshot]
 
