@@ -974,6 +974,178 @@ class WorkflowEngine:
             },
         }
 
+    def waiting_human_resume_transition_commit_verification(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        tail = trusted_lineage[-1]
+        if (
+            tail["event_type"] != "TRANSITION_ACCEPTED"
+            or tail["from_state"] != "WAITING_HUMAN"
+            or not isinstance(tail["decision_resolution_binding"], dict)
+        ):
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a committed WAITING_HUMAN resume transition"
+            )
+        pause_event = next(
+            (
+                event
+                for event in reversed(trusted_lineage[:-1])
+                if event["event_type"] == "TRANSITION_ACCEPTED"
+            ),
+            None,
+        )
+        if pause_event is None or pause_event["to_state"] != "WAITING_HUMAN":
+            raise WorkflowEngineError(
+                "committed resume transition is not bound to its WAITING_HUMAN pause"
+            )
+        source_state = pause_event["from_state"]
+        evidence_kind = self._gate_evidence_kind(source_state, tail["to_state"])
+        if tail["actor"] != self._required_transition_actor(
+            source_state,
+            tail["to_state"],
+        ):
+            raise WorkflowEngineError(
+                "authoritative WAITING_HUMAN resume transition actor is invalid"
+            )
+        decision_binding = tail["decision_resolution_binding"]
+        resolution = decision_binding.get("embedded_record")
+        if not isinstance(resolution, dict):
+            raise WorkflowEngineError(
+                "committed resume transition requires an embedded decision resolution"
+            )
+        try:
+            request = self.decisions.validate_resolution(resolution)
+        except DecisionQueueError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        expected_decision_id = (
+            f"decision-{self._task_token(task_id)}-{pause_event['sequence']:04d}"
+        )
+        request_path = self.decisions.pending_path(expected_decision_id)
+        request_record, request_snapshot = self._read_canonical_evidence_json(
+            request_path
+        )
+        if (
+            decision_binding["decision_id"] != expected_decision_id
+            or request["decision_id"] != expected_decision_id
+            or request_record != request
+            or request["project_id"] != current["project_id"]
+            or request["task_id"] != current["task_id"]
+            or request["stage"] != tail["to_state"]
+            or request["created_at_utc"] != pause_event["created_at_utc"]
+            or request["evidence_paths"]
+            != [binding["path"] for binding in pause_event["evidence_bindings"]]
+            or not self.store.has_committed_decision_resolution(resolution)
+        ):
+            raise WorkflowEngineError(
+                "committed resume decision does not match the authoritative pause"
+            )
+        resolved_path = self.decisions.resolved_path(decision_binding["decision_id"])
+        resolved_record, resolved_snapshot = self._read_canonical_evidence_json(
+            resolved_path
+        )
+        if resolved_record != resolution:
+            raise WorkflowEngineError(
+                "resolved decision record does not match the audit binding"
+            )
+        bindings = tail["evidence_bindings"]
+        evidence_paths = [self._bound_evidence_path(binding) for binding in bindings]
+        expected_snapshots = [
+            (
+                binding["path"],
+                binding["size_bytes"],
+                binding["content_sha256"],
+            )
+            for binding in bindings
+        ]
+        validated_snapshots = self._validate_gate_evidence(
+            tail["to_state"],
+            evidence_paths,
+            current,
+            source_state=source_state,
+        )
+        if validated_snapshots != expected_snapshots:
+            raise WorkflowEngineError(
+                "committed resume evidence does not match its audit bindings"
+            )
+
+        try:
+            final_request = self.decisions.validate_resolution(resolution)
+            final_request_record, final_request_snapshot = (
+                self._read_canonical_evidence_json(request_path)
+            )
+            final_resolved_record, final_resolved_snapshot = (
+                self._read_canonical_evidence_json(resolved_path)
+            )
+            final_validated_snapshots = self._validate_gate_evidence(
+                tail["to_state"],
+                evidence_paths,
+                current,
+                source_state=source_state,
+            )
+            final_committed_resolution = (
+                self.store.has_committed_decision_resolution(resolution)
+            )
+            final_current = self.status(task_id)
+            final_lineage = self._trusted_audit_lineage(final_current)
+            self._require_task_state_audit_tail_binding(
+                final_current,
+                final_lineage,
+            )
+        except (DecisionQueueError, WorkflowEngineError) as exc:
+            raise WorkflowEngineError(
+                "WAITING_HUMAN resume transition commit identity changed during verification"
+            ) from exc
+        if (
+            final_request != request
+            or final_request_record != request_record
+            or final_request_snapshot != request_snapshot
+            or final_resolved_record != resolved_record
+            or final_resolved_snapshot != resolved_snapshot
+            or final_validated_snapshots != expected_snapshots
+            or not final_committed_resolution
+            or final_current != current
+            or self._canonical_sha(final_lineage) != trusted_lineage_identity
+            or final_lineage[-1] != tail
+        ):
+            raise WorkflowEngineError(
+                "WAITING_HUMAN resume transition commit identity changed during verification"
+            )
+
+        return {
+            "status": "WAITING_HUMAN_RESUME_TRANSITION_COMMIT_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "transition_id": tail["transition_id"],
+            "source_state_before_human_gate": source_state,
+            "from_state": tail["from_state"],
+            "to_state": tail["to_state"],
+            "actor": tail["actor"],
+            "evidence_kind": evidence_kind,
+            "decision_id": decision_binding["decision_id"],
+            "resolution_sha256": decision_binding["resolution_sha256"],
+            "pending_decision_sha256": request_snapshot[2],
+            "evidence_count": len(bindings),
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "decision_identity_status": "REVALIDATED",
+            "evidence_identity_status": "REVALIDATED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _require_task_state_audit_tail_binding(
         self,
         current: dict[str, Any],

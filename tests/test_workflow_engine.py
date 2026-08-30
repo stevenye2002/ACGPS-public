@@ -328,6 +328,31 @@ def waiting_human_resolution(
     }
 
 
+def prepare_waiting_human_resume_transition(
+    state_root: Path,
+    *,
+    hour: int = 12,
+):
+    from acgps.workflow_engine import WorkflowEngine
+
+    writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+    waiting = advance_to_waiting_human(writer, hour=hour)
+    resolution = waiting_human_resolution(waiting)
+    evidence_paths = write_planner_transition_evidence(
+        writer,
+        target="SPEC_READY",
+    )
+    writer.advance(
+        "ftic-governance-1",
+        "SPEC_READY",
+        actor="PLANNER",
+        evidence_paths=evidence_paths,
+        decision_resolution=resolution,
+        created_at_utc=f"2026-08-29T{hour:02d}:04:00Z",
+    )
+    return writer, resolution, evidence_paths
+
+
 def advance_to_task_review(engine, *, hour: int) -> Path:
     evidence = advance_to_implementing(engine, hour=hour)
     engine.advance(
@@ -1553,6 +1578,237 @@ class WorkflowEngineTests(unittest.TestCase):
                 "trusted handoff transition commit identity changed during verification",
             ):
                 reader.trusted_task_packet_handoff_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+    def test_waiting_human_resume_transition_commit_verification_revalidates_committed_resume_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, resolution, evidence_paths = (
+                prepare_waiting_human_resume_transition(state_root)
+            )
+            event = writer.audit("ftic-governance-1")[-1]
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            verifier = getattr(
+                reader,
+                "waiting_human_resume_transition_commit_verification",
+                None,
+            )
+            self.assertIsNotNone(verifier, "committed resume verifier is missing")
+            result = verifier("ftic-governance-1")
+
+            self.assertEqual(
+                result["status"],
+                "WAITING_HUMAN_RESUME_TRANSITION_COMMIT_VERIFIED",
+            )
+            self.assertEqual(result["transition_id"], event["transition_id"])
+            self.assertEqual(result["source_state_before_human_gate"], "CLASSIFIED")
+            self.assertEqual(result["from_state"], "WAITING_HUMAN")
+            self.assertEqual(result["to_state"], "SPEC_READY")
+            self.assertEqual(result["actor"], "PLANNER")
+            self.assertEqual(result["decision_id"], resolution["decision_id"])
+            self.assertEqual(result["evidence_count"], len(evidence_paths))
+            self.assertEqual(result["decision_identity_status"], "REVALIDATED")
+            self.assertEqual(result["evidence_identity_status"], "REVALIDATED")
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_transition_commit_verification_rejects_non_resume_tail(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "authoritative audit tail is not a committed WAITING_HUMAN resume transition",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).waiting_human_resume_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_waiting_human_resume_transition_commit_verification_rejects_bound_evidence_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, evidence_paths = prepare_waiting_human_resume_transition(
+                state_root,
+                hour=13,
+            )
+            before_state = writer.status("ftic-governance-1")
+            before_audit = writer.audit("ftic-governance-1")
+            evidence_paths[-1].write_bytes(evidence_paths[-1].read_bytes() + b" ")
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "bound evidence binding content changed",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).waiting_human_resume_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_state)
+            self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
+    def test_waiting_human_resume_transition_commit_verification_rejects_resolution_sidecar_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, resolution, _ = prepare_waiting_human_resume_transition(
+                state_root,
+                hour=14,
+            )
+            before_state = writer.status("ftic-governance-1")
+            before_audit = writer.audit("ftic-governance-1")
+            resolved_path = writer.decisions.resolved_path(resolution["decision_id"])
+            resolved_path.write_bytes(
+                canonical_json_bytes(
+                    dict(resolution, rationale="Changed after the committed resume.")
+                )
+                + b"\n"
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "resolved decision record does not match the audit binding",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).waiting_human_resume_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_state)
+            self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
+    def test_waiting_human_resume_transition_commit_verification_rejects_pause_request_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, resolution, _ = prepare_waiting_human_resume_transition(
+                state_root,
+                hour=15,
+            )
+            before_state = writer.status("ftic-governance-1")
+            before_audit = writer.audit("ftic-governance-1")
+            pending_path = writer.decisions.pending_path(resolution["decision_id"])
+            request = json.loads(pending_path.read_text(encoding="utf-8"))
+            pending_path.write_bytes(
+                canonical_json_bytes(
+                    dict(request, created_at_utc="2026-08-29T15:03:30Z")
+                )
+                + b"\n"
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "committed resume decision does not match the authoritative pause",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).waiting_human_resume_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(writer.status("ftic-governance-1"), before_state)
+            self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
+    def test_waiting_human_resume_transition_commit_verification_rejects_concurrent_state_and_audit_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, _ = prepare_waiting_human_resume_transition(
+                state_root,
+                hour=16,
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            validate_gate_evidence = reader._validate_gate_evidence
+            advanced = False
+
+            def advance_after_gate_evidence_validation(*args, **kwargs):
+                nonlocal advanced
+                result = validate_gate_evidence(*args, **kwargs)
+                if not advanced:
+                    advanced = True
+                    writer.advance(
+                        "ftic-governance-1",
+                        "PLAN_READY",
+                        actor="PLANNER",
+                        evidence_paths=write_planner_transition_evidence(
+                            writer,
+                            target="PLAN_READY",
+                        ),
+                        created_at_utc="2026-08-29T16:05:00Z",
+                    )
+                return result
+
+            with patch.object(
+                reader,
+                "_validate_gate_evidence",
+                side_effect=advance_after_gate_evidence_validation,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "WAITING_HUMAN resume transition commit identity changed during verification",
+            ):
+                reader.waiting_human_resume_transition_commit_verification(
                     "ftic-governance-1"
                 )
 

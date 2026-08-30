@@ -171,6 +171,15 @@ def _build_parser() -> argparse.ArgumentParser:
     task_resume_gate_preview.add_argument("--human-trigger", action="append", default=[])
     task_resume_gate_preview.add_argument("--task-attribute", action="append", default=[])
 
+    task_resume_transition_commit_verify = task_commands.add_parser(
+        "resume-transition-commit-verify"
+    )
+    _add_project_arguments(
+        task_resume_transition_commit_verify,
+        include_state=True,
+    )
+    task_resume_transition_commit_verify.add_argument("--task-id", required=True)
+
     task_advance = task_commands.add_parser("advance")
     _add_project_arguments(task_advance, include_state=True)
     task_advance.add_argument("--task-id", required=True)
@@ -465,6 +474,18 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             human_triggers=args.human_trigger,
             task_attributes=_parse_attributes(args.task_attribute),
         )
+
+    if (
+        args.group == "task"
+        and args.command == "resume-transition-commit-verify"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).waiting_human_resume_transition_commit_verification(args.task_id)
 
     if args.group == "task" and args.command == "advance":
         resolution = _read_mapping(Path(args.decision_resolution)) if args.decision_resolution else None

@@ -288,6 +288,26 @@ does not resolve the decision, write state, or reserve a later transition.
 `task advance` performs the same resume validation again when separately
 authorized.
 
+After an authorized resume has been committed, an operator can revalidate that
+the current audit tail is the exact `WAITING_HUMAN` resume transition:
+
+```powershell
+python -m acgps task resume-transition-commit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The verifier binds the current task and audit head to the preceding human-pause
+event, its canonical pending request and resolved decision sidecar, the
+decision record embedded in the committed audit event, and every ordered resume
+evidence path, size, and SHA-256. It rechecks those identities before returning
+and fails closed if the task or audit advances during the query. It does not
+write state, resolve a decision, authorize another transition, or launch a
+model or process.
+
 After generating a canonical `PLANNER` task packet, an operator can validate
 and preview the handoff without launching a model or writing workflow state:
 

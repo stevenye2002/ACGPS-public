@@ -1494,6 +1494,78 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_committed_waiting_human_resume_transition_without_state_writes(
+        self,
+    ) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        evidence_root = self.state_root / "resume-commit-verification-evidence"
+        evidence_root.mkdir()
+        planner_packet = generate_task_packet(
+            "PLANNER",
+            valid_intake(),
+            valid_policy_result(),
+        )
+        planner_packet_path = evidence_root / "planner-packet.json"
+        planner_packet_path.write_bytes(canonical_json_bytes(planner_packet) + b"\n")
+        planner_result_path = evidence_root / "planner-result.json"
+        planner_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=planner_packet["packet_id"],
+                    role="PLANNER",
+                    summary="Completed the bounded Planner work for SPEC_READY.",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="SPEC_READY",
+                )
+            )
+            + b"\n"
+        )
+        self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "SPEC_READY",
+            "--actor",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-28T01:04:00Z",
+            "--decision-resolution",
+            str(resolution_path),
+            "--evidence",
+            str(planner_packet_path),
+            "--evidence",
+            str(planner_result_path),
+        )
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "task",
+            "resume-transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "WAITING_HUMAN_RESUME_TRANSITION_COMMIT_VERIFIED",
+        )
+        self.assertEqual(result["source_state_before_human_gate"], "CLASSIFIED")
+        self.assertEqual(result["from_state"], "WAITING_HUMAN")
+        self.assertEqual(result["to_state"], "SPEC_READY")
+        self.assertEqual(result["actor"], "PLANNER")
+        self.assertEqual(result["decision_id"], resolution["decision_id"])
+        self.assertEqual(result["decision_identity_status"], "REVALIDATED")
+        self.assertEqual(result["evidence_identity_status"], "REVALIDATED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_rejects_resolution_preview_for_non_authoritative_pending_request(self) -> None:
         from acgps.human_decisions import DecisionQueue
         from acgps.workflow_store import WorkflowStore
