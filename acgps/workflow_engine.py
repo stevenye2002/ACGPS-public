@@ -832,6 +832,148 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_task_packet_handoff_transition_commit_verification(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        tail = trusted_lineage[-1]
+        contract = {
+            ("PLAN_READY", "IMPLEMENTING"): "CODER_HANDOFF",
+            ("FIX_REQUIRED", "IMPLEMENTING"): "CODER_REMEDIATION_HANDOFF",
+        }.get((tail["from_state"], tail["to_state"]))
+        if (
+            tail["event_type"] != "TRANSITION_ACCEPTED"
+            or contract is None
+            or tail["actor"] != "CODER"
+            or self._required_transition_actor(
+                tail["from_state"],
+                tail["to_state"],
+            )
+            != "CODER"
+            or self._gate_evidence_kind(
+                tail["from_state"],
+                tail["to_state"],
+            )
+            != contract
+        ):
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a supported trusted Packet handoff transition"
+            )
+
+        bindings = tail["evidence_bindings"]
+        expected_count = (
+            1
+            if contract == "CODER_HANDOFF"
+            else 1 + len(self._current_fix_cycle_blockers(current))
+        )
+        if len(bindings) != expected_count:
+            raise WorkflowEngineError(
+                "authoritative Packet handoff transition evidence is incomplete"
+        )
+        evidence_paths = [self._bound_evidence_path(binding) for binding in bindings]
+        packet, packet_snapshot = self._read_bound_canonical_evidence_json(bindings[0])
+        try:
+            handoff_preview = build_supervised_coder_handoff_preview(packet)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if (
+            packet["role"] != "CODER"
+            or packet["project_id"] != current["project_id"]
+            or packet["task_id"] != current["task_id"]
+            or handoff_preview["packet_sha256"] != self._canonical_sha(packet)
+        ):
+            raise WorkflowEngineError(
+                "authoritative Packet handoff transition identity is invalid"
+            )
+
+        expected_snapshots = [
+            (
+                binding["path"],
+                binding["size_bytes"],
+                binding["content_sha256"],
+            )
+            for binding in bindings
+        ]
+
+        def validate_handoff_evidence() -> list[tuple[str, int, str]]:
+            if contract == "CODER_REMEDIATION_HANDOFF":
+                return self._validate_coder_remediation_handoff_evidence(
+                    evidence_paths,
+                    current,
+                )
+            current_packet, current_packet_snapshot = (
+                self._read_canonical_evidence_json(evidence_paths[0])
+            )
+            self._validate_coder_packet_against_frozen_plan(
+                current_packet,
+                current,
+                require_latest_transition=False,
+            )
+            return [current_packet_snapshot]
+
+        validated_snapshots = validate_handoff_evidence()
+        if validated_snapshots != expected_snapshots:
+            raise WorkflowEngineError(
+                "authoritative Packet handoff transition evidence does not match its audit bindings"
+            )
+
+        final_packet, final_packet_snapshot = self._read_canonical_evidence_json(
+            evidence_paths[0]
+        )
+        try:
+            final_handoff_preview = build_supervised_coder_handoff_preview(final_packet)
+        except (ContractValidationError, ValueError) as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        final_snapshots = validate_handoff_evidence()
+        final_current = self.status(task_id)
+        final_lineage = self._trusted_audit_lineage(final_current)
+        self._require_task_state_audit_tail_binding(final_current, final_lineage)
+        if (
+            final_packet != packet
+            or final_packet_snapshot != packet_snapshot
+            or final_handoff_preview != handoff_preview
+            or final_snapshots != expected_snapshots
+            or final_current != current
+            or self._canonical_sha(final_lineage) != trusted_lineage_identity
+            or final_lineage[-1] != tail
+        ):
+            raise WorkflowEngineError(
+                "trusted handoff transition commit identity changed during verification"
+            )
+
+        return {
+            "status": "TRUSTED_TASK_PACKET_HANDOFF_TRANSITION_COMMIT_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "transition_id": tail["transition_id"],
+            "from_state": tail["from_state"],
+            "to_state": tail["to_state"],
+            "actor": tail["actor"],
+            "evidence_kind": contract,
+            "packet_id": packet["packet_id"],
+            "role": packet["role"],
+            "packet_content_sha256": packet_snapshot[2],
+            "evidence_count": len(bindings),
+            "additional_evidence_count": len(bindings) - 1,
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "evidence_identity_status": "REVALIDATED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _require_task_state_audit_tail_binding(
         self,
         current: dict[str, Any],

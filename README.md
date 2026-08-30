@@ -357,6 +357,28 @@ the Coder packet before entering `IMPLEMENTING`. This gate does not launch a
 model or authorize changes beyond the frozen task boundary. Other existing
 paths back to `IMPLEMENTING` after review or human intervention are unchanged.
 
+After an operator has separately committed either the initial
+`PLAN_READY -> IMPLEMENTING` handoff or the remediation
+`FIX_REQUIRED -> IMPLEMENTING` handoff, the authoritative tail can be verified
+without changing state:
+
+```powershell
+python -m acgps packet trusted-handoff-transition-commit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The verifier accepts only those two current audit-tail transitions. It derives
+the complete evidence set from the tail, revalidates the Coder packet against
+the frozen plan, and, for remediation, requires the exact current blocking
+evidence. It then rechecks every path, size, SHA-256, task-state identity, and
+audit-lineage identity before returning JSON to stdout. It does not search for
+a different transition, write state, launch a model or process, or authorize a
+subsequent workflow transition.
+
 After the supervised coder returns an `AGENT_RESULT` record, an operator can
 validate its contract and packet binding without launching a process or changing
 workflow state:

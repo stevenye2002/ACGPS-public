@@ -514,6 +514,49 @@ def prepare_trusted_result_transition(
     return writer, packet_path, result_path, additional_paths
 
 
+def prepare_trusted_handoff_transition(
+    state_root: Path,
+    *,
+    remediation: bool,
+):
+    from acgps.workflow_engine import WorkflowEngine
+
+    writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+    if remediation:
+        advance_to_task_review(writer, hour=11)
+        finding_path = state_root / "review-open.json"
+        write_review_finding(finding_path, "finding-remediation", status="OPEN")
+        writer.advance(
+            "ftic-governance-1",
+            "FIX_REQUIRED",
+            actor="REVIEWER",
+            evidence_paths=write_reviewer_transition_evidence(
+                writer,
+                [finding_path],
+                target="FIX_REQUIRED",
+            ),
+            created_at_utc="2026-08-29T11:07:00Z",
+        )
+        packet_path = write_coder_handoff_evidence(writer)
+        evidence_paths = [packet_path, finding_path]
+        from_state = "FIX_REQUIRED"
+        evidence_kind = "CODER_REMEDIATION_HANDOFF"
+    else:
+        advance_to_plan_ready(writer, hour=11)
+        packet_path = write_coder_handoff_evidence(writer)
+        evidence_paths = [packet_path]
+        from_state = "PLAN_READY"
+        evidence_kind = "CODER_HANDOFF"
+    writer.advance(
+        "ftic-governance-1",
+        "IMPLEMENTING",
+        actor="CODER",
+        evidence_paths=evidence_paths,
+        created_at_utc="2026-08-29T11:08:00Z",
+    )
+    return writer, packet_path, evidence_paths, from_state, evidence_kind
+
+
 def prepare_rc_ready_lineage(state_root: Path):
     engine, review_path, verification_paths = prepare_verified_rc_lineage(
         state_root,
@@ -1347,6 +1390,171 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
             self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
             self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_handoff_transition_commit_verification_accepts_initial_and_remediation_handoffs(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        for remediation in (False, True):
+            with self.subTest(remediation=remediation), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                writer, packet_path, evidence_paths, from_state, evidence_kind = (
+                    prepare_trusted_handoff_transition(
+                        state_root,
+                        remediation=remediation,
+                    )
+                )
+                before = tree_bytes(state_root)
+
+                result = WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).trusted_task_packet_handoff_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+                event = writer.audit("ftic-governance-1")[-1]
+                self.assertEqual(
+                    result["status"],
+                    "TRUSTED_TASK_PACKET_HANDOFF_TRANSITION_COMMIT_VERIFIED",
+                )
+                self.assertEqual(result["transition_id"], event["transition_id"])
+                self.assertEqual(result["from_state"], from_state)
+                self.assertEqual(result["to_state"], "IMPLEMENTING")
+                self.assertEqual(result["actor"], "CODER")
+                self.assertEqual(result["role"], "CODER")
+                self.assertEqual(result["evidence_kind"], evidence_kind)
+                self.assertEqual(result["evidence_count"], len(evidence_paths))
+                self.assertEqual(
+                    result["additional_evidence_count"],
+                    len(evidence_paths) - 1,
+                )
+                self.assertEqual(
+                    result["packet_content_sha256"],
+                    hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+                )
+                self.assertEqual(result["audit_head_event_id"], event["event_id"])
+                self.assertEqual(result["audit_head_hash"], event["event_hash"])
+                self.assertEqual(result["state_identity_status"], "UNCHANGED_DURING_QUERY")
+                self.assertEqual(result["audit_identity_status"], "UNCHANGED_DURING_QUERY")
+                self.assertEqual(result["evidence_identity_status"], "REVALIDATED")
+                self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+                self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+                self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_handoff_transition_commit_verification_rejects_bound_evidence_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        for remediation in (False, True):
+            with self.subTest(remediation=remediation), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                writer, packet_path, evidence_paths, _, _ = (
+                    prepare_trusted_handoff_transition(
+                        state_root,
+                        remediation=remediation,
+                    )
+                )
+                drift_path = evidence_paths[-1] if remediation else packet_path
+                before_state = writer.status("ftic-governance-1")
+                before_audit = writer.audit("ftic-governance-1")
+                drift_path.write_bytes(drift_path.read_bytes() + b" ")
+
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "bound evidence binding content changed",
+                ):
+                    WorkflowEngine(
+                        ROOT,
+                        state_root,
+                        MVP_FTIC_ROOT,
+                        "ftic-v1",
+                        read_only=True,
+                    ).trusted_task_packet_handoff_transition_commit_verification(
+                        "ftic-governance-1"
+                    )
+
+                self.assertEqual(writer.status("ftic-governance-1"), before_state)
+                self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
+    def test_trusted_handoff_transition_commit_verification_rejects_non_handoff_tail(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "authoritative audit tail is not a supported trusted Packet handoff transition",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).trusted_task_packet_handoff_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_handoff_transition_commit_verification_rejects_concurrent_state_and_audit_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, _, _, _ = prepare_trusted_handoff_transition(
+                state_root,
+                remediation=False,
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            validate_frozen_plan = reader._validate_coder_packet_against_frozen_plan
+            validation_count = 0
+
+            def advance_after_final_frozen_plan_validation(*args, **kwargs):
+                nonlocal validation_count
+                result = validate_frozen_plan(*args, **kwargs)
+                validation_count += 1
+                if validation_count == 2:
+                    writer.advance(
+                        "ftic-governance-1",
+                        "TASK_REVIEW",
+                        actor="CODER",
+                        evidence_paths=write_task_review_evidence(writer),
+                        created_at_utc="2026-08-29T11:09:00Z",
+                    )
+                return result
+
+            with patch.object(
+                reader,
+                "_validate_coder_packet_against_frozen_plan",
+                side_effect=advance_after_final_frozen_plan_validation,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted handoff transition commit identity changed during verification",
+            ):
+                reader.trusted_task_packet_handoff_transition_commit_verification(
+                    "ftic-governance-1"
+                )
 
     def test_trusted_result_transition_commit_verification_rejects_non_result_tail(
         self,

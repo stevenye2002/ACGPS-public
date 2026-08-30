@@ -784,6 +784,94 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_committed_trusted_handoff_transition_without_state_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        packet_path, packet = self._prepare_r2_packet()
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        for index, target in enumerate(("SPEC_READY", "PLAN_READY"), start=1):
+            result_path = self.state_root / "results" / f"planner-{target.casefold()}.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_bytes(
+                canonical_json_bytes(
+                    dict(
+                        valid_agent_result(),
+                        packet_id=packet["packet_id"],
+                        role="PLANNER",
+                        changed_files=[],
+                        created_files=[],
+                        recommended_next_state=target,
+                    )
+                )
+                + b"\n"
+            )
+            engine.advance(
+                "ftic-governance-1",
+                target,
+                actor="PLANNER",
+                evidence_paths=[packet_path, result_path],
+                created_at_utc=f"2026-08-29T06:3{index}:00Z",
+            )
+        coder_packet_path = self.state_root / "packets" / "coder.json"
+        coder_packet = self._run(
+            "packet",
+            "generate",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--role",
+            "CODER",
+            "--created-at-utc",
+            "2026-08-29T06:33:00Z",
+            "--output",
+            str(coder_packet_path),
+        )
+        self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "IMPLEMENTING",
+            "--actor",
+            "CODER",
+            "--created-at-utc",
+            "2026-08-29T06:34:00Z",
+            "--evidence",
+            str(coder_packet_path),
+        )
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "packet",
+            "trusted-handoff-transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_TASK_PACKET_HANDOFF_TRANSITION_COMMIT_VERIFIED",
+        )
+        self.assertEqual(result["from_state"], "PLAN_READY")
+        self.assertEqual(result["to_state"], "IMPLEMENTING")
+        self.assertEqual(result["actor"], "CODER")
+        self.assertEqual(result["packet_id"], coder_packet["packet_id"])
+        self.assertEqual(result["evidence_kind"], "CODER_HANDOFF")
+        self.assertEqual(result["evidence_count"], 1)
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_packet_verify_rejects_tampering_without_state_write(self) -> None:
         packet_path, packet = self._prepare_r2_packet()
         packet_path.write_bytes(

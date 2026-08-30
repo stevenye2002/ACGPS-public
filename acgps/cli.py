@@ -287,6 +287,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--task-id",
         required=True,
     )
+    packet_trusted_handoff_transition_commit_verify = packet_commands.add_parser(
+        "trusted-handoff-transition-commit-verify"
+    )
+    _add_project_arguments(
+        packet_trusted_handoff_transition_commit_verify,
+        include_state=True,
+    )
+    packet_trusted_handoff_transition_commit_verify.add_argument(
+        "--task-id",
+        required=True,
+    )
 
     decision = commands.add_parser("decision")
     decision_commands = decision.add_subparsers(dest="command", required=True)
@@ -571,6 +582,18 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).trusted_task_packet_result_transition_commit_verification(args.task_id)
+
+    if (
+        args.group == "packet"
+        and args.command == "trusted-handoff-transition-commit-verify"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_task_packet_handoff_transition_commit_verification(args.task_id)
 
     if args.group == "decision" and args.command == "pending":
         decisions = _read_only_decision_queue(Path(args.state_root)).list_pending()
