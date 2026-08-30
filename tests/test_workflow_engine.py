@@ -4782,6 +4782,166 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertTrue(mutated)
 
+    def test_transition_commit_verification_dispatches_existing_verifiers_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        def verify(state_root: Path, expected_status: str) -> dict[str, object]:
+            before = tree_bytes(state_root)
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).transition_commit_verification("ftic-governance-1")
+            self.assertEqual(result["status"], expected_status)
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(
+                result["controls"]["workflow_transition"],
+                "NOT_PERFORMED",
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "result-state"
+            prepare_trusted_result_transition(state_root, role="PLANNER")
+            result = verify(
+                state_root,
+                "TRUSTED_TASK_PACKET_RESULT_TRANSITION_COMMIT_VERIFIED",
+            )
+            self.assertEqual((result["from_state"], result["to_state"]), (
+                "CLASSIFIED",
+                "SPEC_READY",
+            ))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "handoff-state"
+            prepare_trusted_handoff_transition(state_root, remediation=False)
+            result = verify(
+                state_root,
+                "TRUSTED_TASK_PACKET_HANDOFF_TRANSITION_COMMIT_VERIFIED",
+            )
+            self.assertEqual((result["from_state"], result["to_state"]), (
+                "PLAN_READY",
+                "IMPLEMENTING",
+            ))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "resume-state"
+            prepare_waiting_human_resume_transition(state_root)
+            result = verify(
+                state_root,
+                "WAITING_HUMAN_RESUME_TRANSITION_COMMIT_VERIFIED",
+            )
+            self.assertEqual(result["from_state"], "WAITING_HUMAN")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "rc-ready-state"
+            prepare_committed_rc_ready(state_root, ["verification-current"])
+            result = verify(state_root, "RC_READY_TRANSITION_COMMIT_VERIFIED")
+            self.assertEqual((result["from_state"], result["to_state"]), (
+                "VERIFIED",
+                "RC_READY",
+            ))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "closed-state"
+            writer, manifest_path, _ = prepare_committed_rc_ready(
+                state_root,
+                ["verification-current"],
+            )
+            writer.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-30T01:12:00Z",
+            )
+            result = verify(state_root, "CLOSED_TRANSITION_COMMIT_VERIFIED")
+            self.assertEqual((result["from_state"], result["to_state"]), (
+                "RC_READY",
+                "CLOSED",
+            ))
+
+    def test_transition_commit_verification_rejects_unsupported_tail_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            prepare_r2_classified_packet(state_root, role="PLANNER")
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "authoritative audit tail is not supported by unified committed transition verification",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).transition_commit_verification("ftic-governance-1")
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_transition_commit_verification_rejects_same_family_route_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, packet_path, _, _ = prepare_trusted_result_transition(
+                state_root,
+                role="PLANNER",
+            )
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            original_verify = (
+                reader.trusted_task_packet_result_transition_commit_verification
+            )
+            advanced = False
+
+            def advance_then_verify(task_id: str):
+                nonlocal advanced
+                writer.advance(
+                    task_id,
+                    "PLAN_READY",
+                    actor="PLANNER",
+                    evidence_paths=write_planner_transition_evidence(
+                        writer,
+                        target="PLAN_READY",
+                        packet=packet,
+                    ),
+                    created_at_utc="2026-08-30T02:01:00Z",
+                )
+                advanced = True
+                return original_verify(task_id)
+
+            with patch.object(
+                reader,
+                "trusted_task_packet_result_transition_commit_verification",
+                side_effect=advance_then_verify,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "unified transition commit identity changed during routing",
+            ):
+                reader.transition_commit_verification("ftic-governance-1")
+
+            self.assertTrue(advanced)
+
     def test_rc_ready_to_closed_preview_exposes_bound_controller_contract_without_mutation(
         self,
     ) -> None:

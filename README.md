@@ -660,6 +660,25 @@ state/audit identity checks before returning. It opens the workflow controller
 read-only and does not write state, advance the workflow, run a model or
 subprocess, or authorize publishing, deployment, tagging, or release.
 
+An operator that does not already know which committed-transition verifier
+applies can use the unified read-only entry point:
+
+```powershell
+python -m acgps task transition-commit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The command dispatches only to the existing trusted Packet/Result, Coder
+handoff, `WAITING_HUMAN` resume, `VERIFIED -> RC_READY`, or supported
+`CLOSED` committed-transition verifier. It returns that verifier's existing
+result unchanged. Unsupported audit tails fail closed; the command does not
+add a generic transition contract, write state, advance the workflow, launch a
+model or process, or authorize any external action.
+
 ## Intended first pilot
 
 FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.

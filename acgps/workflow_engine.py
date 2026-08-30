@@ -1900,6 +1900,77 @@ class WorkflowEngine:
             },
         }
 
+    def transition_commit_verification(self, task_id: str) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        tail = trusted_lineage[-1]
+        transition = (tail["from_state"], tail["to_state"])
+
+        if tail["event_type"] != "TRANSITION_ACCEPTED":
+            raise WorkflowEngineError(
+                "authoritative audit tail is not supported by unified committed "
+                "transition verification"
+            )
+        if tail["from_state"] == "WAITING_HUMAN":
+            verifier = self.waiting_human_resume_transition_commit_verification
+        elif transition in {
+            ("CLASSIFIED", "SPEC_READY"),
+            ("SPEC_READY", "PLAN_READY"),
+            ("IMPLEMENTING", "TASK_REVIEW"),
+            ("TASK_REVIEW", "FIX_REQUIRED"),
+            ("TASK_REVIEW", "INTEGRATING"),
+            ("INTEGRATING", "FIX_REQUIRED"),
+            ("INTEGRATING", "VERIFIED"),
+        }:
+            verifier = self.trusted_task_packet_result_transition_commit_verification
+        elif transition in {
+            ("PLAN_READY", "IMPLEMENTING"),
+            ("FIX_REQUIRED", "IMPLEMENTING"),
+        }:
+            verifier = self.trusted_task_packet_handoff_transition_commit_verification
+        elif transition == ("VERIFIED", "RC_READY"):
+            verifier = self.rc_ready_transition_commit_verification
+        elif transition in {
+            ("VERIFIED", "CLOSED"),
+            ("RC_READY", "CLOSED"),
+        }:
+            verifier = self.closed_transition_commit_verification
+        else:
+            raise WorkflowEngineError(
+                "authoritative audit tail is not supported by unified committed "
+                "transition verification"
+            )
+
+        result = verifier(task_id)
+        expected_identity = (
+            current["task_id"],
+            current["project_id"],
+            current["current_state"],
+            tail["transition_id"],
+            tail["from_state"],
+            tail["to_state"],
+            current["audit_generation"],
+            current["audit_head_event_id"],
+            current["audit_head_hash"],
+        )
+        verified_identity = (
+            result.get("task_id"),
+            result.get("project_id"),
+            result.get("current_state"),
+            result.get("transition_id"),
+            result.get("from_state"),
+            result.get("to_state"),
+            result.get("audit_generation"),
+            result.get("audit_head_event_id"),
+            result.get("audit_head_hash"),
+        )
+        if verified_identity != expected_identity:
+            raise WorkflowEngineError(
+                "unified transition commit identity changed during routing"
+            )
+        return result
+
     def _prepare_transition_validation(
         self,
         task_id: str,

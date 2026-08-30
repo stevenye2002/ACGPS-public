@@ -2738,6 +2738,20 @@ class MVPCLITests(unittest.TestCase):
             state_root_before_closed_verification,
         )
 
+        unified_verification = self._run(
+            "task",
+            "transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(unified_verification, closed_verification)
+        self.assertEqual(
+            self._state_root_identity(self.state_root),
+            state_root_before_closed_verification,
+        )
+
         status = self._run(
             "task",
             "status",
