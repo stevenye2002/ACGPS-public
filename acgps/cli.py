@@ -180,6 +180,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     task_resume_transition_commit_verify.add_argument("--task-id", required=True)
 
+    task_closed_transition_commit_verify = task_commands.add_parser(
+        "closed-transition-commit-verify"
+    )
+    _add_project_arguments(
+        task_closed_transition_commit_verify,
+        include_state=True,
+    )
+    task_closed_transition_commit_verify.add_argument("--task-id", required=True)
+
     task_advance = task_commands.add_parser("advance")
     _add_project_arguments(task_advance, include_state=True)
     task_advance.add_argument("--task-id", required=True)
@@ -491,6 +500,18 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).waiting_human_resume_transition_commit_verification(args.task_id)
+
+    if (
+        args.group == "task"
+        and args.command == "closed-transition-commit-verify"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).closed_transition_commit_verification(args.task_id)
 
     if args.group == "task" and args.command == "advance":
         resolution = _read_mapping(Path(args.decision_resolution)) if args.decision_resolution else None

@@ -1803,6 +1803,103 @@ class WorkflowEngine:
             },
         }
 
+    def closed_transition_commit_verification(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        tail = trusted_lineage[-1]
+        evidence_kind = {
+            ("VERIFIED", "CLOSED"): "VERIFIED_CLOSURE_EVIDENCE",
+            ("RC_READY", "CLOSED"): "RELEASE_CANDIDATE_MANIFEST",
+        }.get((tail["from_state"], tail["to_state"]))
+        if (
+            tail["event_type"] != "TRANSITION_ACCEPTED"
+            or evidence_kind is None
+            or tail["actor"] != "CONTROLLER"
+            or self._required_transition_actor(
+                tail["from_state"],
+                tail["to_state"],
+            )
+            != "CONTROLLER"
+            or self._gate_evidence_kind(
+                tail["from_state"],
+                tail["to_state"],
+            )
+            != evidence_kind
+        ):
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a supported committed CLOSED transition"
+            )
+
+        bindings = tail["evidence_bindings"]
+        evidence_paths = [self._bound_evidence_path(binding) for binding in bindings]
+        expected_snapshots = [
+            (
+                binding["path"],
+                binding["size_bytes"],
+                binding["content_sha256"],
+            )
+            for binding in bindings
+        ]
+        validated_snapshots = self._validate_gate_evidence(
+            "CLOSED",
+            evidence_paths,
+            current,
+            source_state=tail["from_state"],
+        )
+        if validated_snapshots != expected_snapshots:
+            raise WorkflowEngineError(
+                "committed CLOSED transition evidence does not match its audit bindings"
+            )
+
+        final_validated_snapshots = self._validate_gate_evidence(
+            "CLOSED",
+            evidence_paths,
+            current,
+            source_state=tail["from_state"],
+        )
+        final_current = self.status(task_id)
+        final_lineage = self._trusted_audit_lineage(final_current)
+        self._require_task_state_audit_tail_binding(final_current, final_lineage)
+        if (
+            final_validated_snapshots != expected_snapshots
+            or final_current != current
+            or self._canonical_sha(final_lineage) != trusted_lineage_identity
+            or final_lineage[-1] != tail
+        ):
+            raise WorkflowEngineError(
+                "CLOSED transition commit identity changed during verification"
+            )
+
+        return {
+            "status": "CLOSED_TRANSITION_COMMIT_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "transition_id": tail["transition_id"],
+            "from_state": tail["from_state"],
+            "to_state": tail["to_state"],
+            "actor": tail["actor"],
+            "evidence_kind": evidence_kind,
+            "evidence_count": len(bindings),
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "evidence_identity_status": "REVALIDATED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _prepare_transition_validation(
         self,
         task_id: str,

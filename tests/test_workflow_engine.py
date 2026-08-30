@@ -4630,6 +4630,158 @@ class WorkflowEngineTests(unittest.TestCase):
                 ):
                     reader.rc_ready_transition_commit_verification("ftic-governance-1")
 
+    def test_closed_transition_commit_verification_enforces_exact_existing_contracts_without_mutation(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "verified-closure-state"
+            writer, _, _ = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            verified_event = writer.audit("ftic-governance-1")[-1]
+            evidence_paths = [
+                writer._bound_evidence_path(binding)
+                for binding in verified_event["evidence_bindings"]
+            ]
+            writer.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=evidence_paths,
+                created_at_utc="2026-08-30T01:11:00Z",
+            )
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).closed_transition_commit_verification("ftic-governance-1")
+
+            self.assertEqual(result["status"], "CLOSED_TRANSITION_COMMIT_VERIFIED")
+            self.assertEqual(result["from_state"], "VERIFIED")
+            self.assertEqual(result["to_state"], "CLOSED")
+            self.assertEqual(result["actor"], "CONTROLLER")
+            self.assertEqual(result["evidence_kind"], "VERIFIED_CLOSURE_EVIDENCE")
+            self.assertEqual(result["evidence_count"], len(evidence_paths))
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "rc-ready-closure-state"
+            writer, manifest_path = prepare_rc_ready_lineage(state_root)
+            writer.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-30T01:12:00Z",
+            )
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).closed_transition_commit_verification("ftic-governance-1")
+
+            self.assertEqual(result["status"], "CLOSED_TRANSITION_COMMIT_VERIFIED")
+            self.assertEqual(result["from_state"], "RC_READY")
+            self.assertEqual(result["to_state"], "CLOSED")
+            self.assertEqual(result["actor"], "CONTROLLER")
+            self.assertEqual(result["evidence_kind"], "RELEASE_CANDIDATE_MANIFEST")
+            self.assertEqual(result["evidence_count"], 1)
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "unsupported-tail-state"
+            prepare_committed_rc_ready(state_root, ["verification-current"])
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "authoritative audit tail is not a supported committed CLOSED transition",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).closed_transition_commit_verification("ftic-governance-1")
+
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_closed_transition_commit_verification_rejects_evidence_drift_during_query(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, verification_paths = prepare_verified_rc_lineage(
+                state_root,
+                ["verification-current"],
+            )
+            verified_event = writer.audit("ftic-governance-1")[-1]
+            evidence_paths = [
+                writer._bound_evidence_path(binding)
+                for binding in verified_event["evidence_bindings"]
+            ]
+            writer.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=evidence_paths,
+                created_at_utc="2026-08-30T01:11:00Z",
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            original_validate = reader._validate_gate_evidence
+            verification_path = verification_paths[0]
+            mutated = False
+
+            def mutate_after_validation(*args, **kwargs):
+                nonlocal mutated
+                snapshots = original_validate(*args, **kwargs)
+                if not mutated:
+                    record = json.loads(verification_path.read_text(encoding="utf-8"))
+                    verification_path.write_bytes(
+                        canonical_json_bytes(
+                            dict(record, verification_id="verification-replaced")
+                        )
+                        + b"\n"
+                    )
+                    mutated = True
+                return snapshots
+
+            with patch.object(
+                reader,
+                "_validate_gate_evidence",
+                side_effect=mutate_after_validation,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "CLOSED evidence must exactly match the latest trusted VERIFIED audit evidence",
+            ):
+                reader.closed_transition_commit_verification("ftic-governance-1")
+
+            self.assertTrue(mutated)
+
     def test_rc_ready_to_closed_preview_exposes_bound_controller_contract_without_mutation(
         self,
     ) -> None:

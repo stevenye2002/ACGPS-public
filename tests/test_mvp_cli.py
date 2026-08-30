@@ -2687,6 +2687,57 @@ class MVPCLITests(unittest.TestCase):
             state_root_before_commit_verification,
         )
 
+        closed_state = self._run(
+            "task",
+            "advance",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+            "--to-state",
+            "CLOSED",
+            "--actor",
+            "CONTROLLER",
+            "--created-at-utc",
+            "2026-08-23T00:11:00Z",
+            "--evidence",
+            str(manifest_path),
+        )
+        self.assertEqual(closed_state["current_state"], "CLOSED")
+        state_root_before_closed_verification = self._state_root_identity(self.state_root)
+
+        closed_verification = self._run(
+            "task",
+            "closed-transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(
+            closed_verification["status"],
+            "CLOSED_TRANSITION_COMMIT_VERIFIED",
+        )
+        self.assertEqual(closed_verification["from_state"], "RC_READY")
+        self.assertEqual(closed_verification["to_state"], "CLOSED")
+        self.assertEqual(closed_verification["actor"], "CONTROLLER")
+        self.assertEqual(
+            closed_verification["evidence_kind"],
+            "RELEASE_CANDIDATE_MANIFEST",
+        )
+        self.assertEqual(closed_verification["evidence_count"], 1)
+        self.assertEqual(
+            closed_verification["controls"]["state_write"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(
+            closed_verification["controls"]["workflow_transition"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(
+            self._state_root_identity(self.state_root),
+            state_root_before_closed_verification,
+        )
+
         status = self._run(
             "task",
             "status",
@@ -2695,8 +2746,8 @@ class MVPCLITests(unittest.TestCase):
             "ftic-governance-1",
             "--include-audit",
         )
-        self.assertEqual(status["state"]["current_state"], "RC_READY")
-        self.assertEqual([event["sequence"] for event in status["audit"]], list(range(1, 11)))
+        self.assertEqual(status["state"]["current_state"], "CLOSED")
+        self.assertEqual([event["sequence"] for event in status["audit"]], list(range(1, 12)))
 
     def test_cli_rejection_is_nonzero_and_does_not_advance_state(self) -> None:
         self._run(

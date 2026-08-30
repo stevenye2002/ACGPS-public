@@ -641,6 +641,25 @@ and revalidates the manifest, its referenced evidence, and the latest trusted
 completion within the authorized scope; it does not authorize publishing,
 deployment, tagging, or production release.
 
+After either supported closure commits, an operator can verify the authoritative
+committed transition without resupplying evidence:
+
+```powershell
+python -m acgps task closed-transition-commit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The command accepts only `VERIFIED -> CLOSED` or `RC_READY -> CLOSED`, both
+authored by `CONTROLLER`. It revalidates the evidence bound by the authoritative
+audit tail against the existing closure contract, then repeats the evidence and
+state/audit identity checks before returning. It opens the workflow controller
+read-only and does not write state, advance the workflow, run a model or
+subprocess, or authorize publishing, deployment, tagging, or release.
+
 ## Intended first pilot
 
 FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.
