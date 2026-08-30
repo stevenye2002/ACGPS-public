@@ -700,24 +700,32 @@ class WorkflowEngine:
                 "authoritative audit tail is not a supported trusted Packet/Result transition"
             )
 
-        evidence_kind = self._gate_evidence_kind(
-            tail["from_state"],
-            tail["to_state"],
-        )
-        expected_role = {
-            "PLANNER_RESULT": "PLANNER",
-            "CODER_RESULT": "CODER",
-            "REVIEWER_RESULT": "REVIEWER",
-            "VERIFIER_RESULT": "VERIFIER",
-        }.get(evidence_kind)
+        contract = {
+            ("CLASSIFIED", "SPEC_READY"): ("PLANNER", "PLANNER_RESULT"),
+            ("SPEC_READY", "PLAN_READY"): ("PLANNER", "PLANNER_RESULT"),
+            ("IMPLEMENTING", "TASK_REVIEW"): ("CODER", "CODER_RESULT"),
+            ("TASK_REVIEW", "FIX_REQUIRED"): ("REVIEWER", "REVIEWER_RESULT"),
+            ("TASK_REVIEW", "INTEGRATING"): ("REVIEWER", "REVIEWER_RESULT"),
+            ("INTEGRATING", "FIX_REQUIRED"): ("VERIFIER", "VERIFIER_RESULT"),
+            ("INTEGRATING", "VERIFIED"): ("VERIFIER", "VERIFIER_RESULT"),
+        }.get((tail["from_state"], tail["to_state"]))
+        if contract is None:
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a supported trusted Packet/Result transition"
+            )
+        expected_role, evidence_kind = contract
         if (
-            expected_role is None
-            or tail["actor"] != expected_role
+            tail["actor"] != expected_role
             or self._required_transition_actor(
                 tail["from_state"],
                 tail["to_state"],
             )
             != expected_role
+            or self._gate_evidence_kind(
+                tail["from_state"],
+                tail["to_state"],
+            )
+            != evidence_kind
         ):
             raise WorkflowEngineError(
                 "authoritative audit tail is not a supported trusted Packet/Result transition"

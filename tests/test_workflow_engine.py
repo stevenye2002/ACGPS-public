@@ -424,6 +424,96 @@ def prepare_verified_rc_lineage(
     return engine, review_path, verification_paths
 
 
+def prepare_trusted_result_transition(
+    state_root: Path,
+    *,
+    role: str,
+):
+    writer, _, packet_path, packet = prepare_r2_classified_packet(
+        state_root,
+        role=role,
+    )
+    if role != "PLANNER":
+        for minute, target in enumerate(("SPEC_READY", "PLAN_READY"), start=3):
+            writer.advance(
+                "ftic-governance-1",
+                target,
+                actor="PLANNER",
+                evidence_paths=write_planner_transition_evidence(
+                    writer,
+                    target=target,
+                ),
+                created_at_utc=f"2026-08-29T08:0{minute}:00Z",
+            )
+        writer.advance(
+            "ftic-governance-1",
+            "IMPLEMENTING",
+            actor="CODER",
+            evidence_paths=[write_coder_handoff_evidence(writer)],
+            created_at_utc="2026-08-29T08:05:00Z",
+        )
+    if role in {"REVIEWER", "VERIFIER"}:
+        writer.advance(
+            "ftic-governance-1",
+            "TASK_REVIEW",
+            actor="CODER",
+            evidence_paths=write_task_review_evidence(writer),
+            created_at_utc="2026-08-29T08:06:00Z",
+        )
+    if role == "VERIFIER":
+        review_path = state_root / "review-closed.json"
+        write_review_finding(review_path, "finding-transition", status="CLOSED")
+        writer.advance(
+            "ftic-governance-1",
+            "INTEGRATING",
+            actor="REVIEWER",
+            evidence_paths=write_reviewer_transition_evidence(
+                writer,
+                [review_path],
+                target="INTEGRATING",
+            ),
+            created_at_utc="2026-08-29T08:07:00Z",
+        )
+
+    target_by_role = {
+        "PLANNER": "SPEC_READY",
+        "CODER": "TASK_REVIEW",
+        "REVIEWER": "INTEGRATING",
+        "VERIFIER": "VERIFIED",
+    }
+    target = target_by_role[role]
+    result = dict(
+        valid_agent_result(),
+        packet_id=packet["packet_id"],
+        role=role,
+        changed_files=[],
+        recommended_next_state=target,
+    )
+    result_path = state_root / "results" / f"{role.casefold()}.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_bytes(canonical_json_bytes(result) + b"\n")
+    additional_paths: list[Path] = []
+    if role == "REVIEWER":
+        finding_path = state_root / "review-result-closed.json"
+        write_review_finding(finding_path, "finding-result", status="CLOSED")
+        additional_paths.append(finding_path)
+    elif role == "VERIFIER":
+        additional_paths.append(
+            write_verification_record(
+                state_root / "verification-result.json",
+                "verification-result",
+            )
+        )
+    writer.trusted_task_packet_result_transition_advance(
+        "ftic-governance-1",
+        packet_path,
+        result_path,
+        evidence_paths=additional_paths,
+        created_at_utc="2026-08-29T08:08:00Z",
+    )
+    return writer, packet_path, result_path, additional_paths
+
+
 def prepare_rc_ready_lineage(state_root: Path):
     engine, review_path, verification_paths = prepare_verified_rc_lineage(
         state_root,
@@ -1333,6 +1423,200 @@ class WorkflowEngineTests(unittest.TestCase):
 
             self.assertEqual(writer.status("ftic-governance-1"), before_state)
             self.assertEqual(writer.audit("ftic-governance-1"), before_audit)
+
+    def test_trusted_result_transition_commit_verification_accepts_all_four_roles(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        expected_transitions = {
+            "PLANNER": ("CLASSIFIED", "SPEC_READY"),
+            "CODER": ("IMPLEMENTING", "TASK_REVIEW"),
+            "REVIEWER": ("TASK_REVIEW", "INTEGRATING"),
+            "VERIFIER": ("INTEGRATING", "VERIFIED"),
+        }
+        for role, (from_state, to_state) in expected_transitions.items():
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                writer, _, _, _ = prepare_trusted_result_transition(
+                    state_root,
+                    role=role,
+                )
+
+                result = WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).trusted_task_packet_result_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+                self.assertEqual(result["role"], role)
+                self.assertEqual(result["from_state"], from_state)
+                self.assertEqual(result["to_state"], to_state)
+                self.assertEqual(
+                    result["audit_head_event_id"],
+                    writer.audit("ftic-governance-1")[-1]["event_id"],
+                )
+
+    def test_trusted_result_transition_commit_verification_rejects_waiting_human_resume_tail(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, packet_path, packet = prepare_r2_classified_packet(
+                state_root,
+                role="CODER",
+            )
+            for minute, target in enumerate(("SPEC_READY", "PLAN_READY"), start=3):
+                writer.advance(
+                    "ftic-governance-1",
+                    target,
+                    actor="PLANNER",
+                    evidence_paths=write_planner_transition_evidence(
+                        writer,
+                        target=target,
+                    ),
+                    created_at_utc=f"2026-08-29T09:0{minute}:00Z",
+                )
+            writer.advance(
+                "ftic-governance-1",
+                "IMPLEMENTING",
+                actor="CODER",
+                evidence_paths=[write_coder_handoff_evidence(writer)],
+                created_at_utc="2026-08-29T09:05:00Z",
+            )
+            result = dict(
+                valid_agent_result(),
+                packet_id=packet["packet_id"],
+                role="CODER",
+                changed_files=[],
+                recommended_next_state="TASK_REVIEW",
+            )
+            result_path = state_root / "results" / "coder.json"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_bytes(canonical_json_bytes(result) + b"\n")
+            waiting = writer.advance(
+                "ftic-governance-1",
+                "TASK_REVIEW",
+                actor="CONTROLLER",
+                evidence_paths=[packet_path, result_path],
+                human_triggers=["H1_PRODUCT_INTENT"],
+                created_at_utc="2026-08-29T09:06:00Z",
+            )
+            writer.advance(
+                "ftic-governance-1",
+                "TASK_REVIEW",
+                actor="CODER",
+                evidence_paths=[packet_path, result_path],
+                decision_resolution=waiting_human_resolution(
+                    waiting,
+                    resume_state="TASK_REVIEW",
+                ),
+                created_at_utc="2026-08-29T09:07:00Z",
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "authoritative audit tail is not a supported trusted Packet/Result transition",
+            ):
+                WorkflowEngine(
+                    ROOT,
+                    state_root,
+                    MVP_FTIC_ROOT,
+                    "ftic-v1",
+                    read_only=True,
+                ).trusted_task_packet_result_transition_commit_verification(
+                    "ftic-governance-1"
+                )
+
+    def test_trusted_result_transition_commit_verification_rejects_packet_and_additional_evidence_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        scenarios = (("PLANNER", "packet"), ("VERIFIER", "additional"))
+        for role, drift_kind in scenarios:
+            with self.subTest(role=role, drift_kind=drift_kind), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                _, packet_path, _, additional_paths = prepare_trusted_result_transition(
+                    state_root,
+                    role=role,
+                )
+                drift_path = (
+                    packet_path
+                    if drift_kind == "packet"
+                    else additional_paths[0]
+                )
+                drift_path.write_bytes(drift_path.read_bytes() + b" ")
+
+                with self.assertRaisesRegex(
+                    WorkflowEngineError,
+                    "bound evidence binding content changed",
+                ):
+                    WorkflowEngine(
+                        ROOT,
+                        state_root,
+                        MVP_FTIC_ROOT,
+                        "ftic-v1",
+                        read_only=True,
+                    ).trusted_task_packet_result_transition_commit_verification(
+                        "ftic-governance-1"
+                    )
+
+    def test_trusted_result_transition_commit_verification_rejects_concurrent_state_and_audit_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, _, _, _ = prepare_trusted_result_transition(
+                state_root,
+                role="PLANNER",
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            validate_gate_evidence = reader._validate_gate_evidence
+            validation_count = 0
+
+            def advance_after_final_evidence_validation(*args, **kwargs):
+                nonlocal validation_count
+                snapshots = validate_gate_evidence(*args, **kwargs)
+                validation_count += 1
+                if validation_count == 2:
+                    writer.advance(
+                        "ftic-governance-1",
+                        "PLAN_READY",
+                        actor="PLANNER",
+                        evidence_paths=write_planner_transition_evidence(
+                            writer,
+                            target="PLAN_READY",
+                        ),
+                        created_at_utc="2026-08-29T10:04:00Z",
+                    )
+                return snapshots
+
+            with patch.object(
+                reader,
+                "_validate_gate_evidence",
+                side_effect=advance_after_final_evidence_validation,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted transition commit identity changed during verification",
+            ):
+                reader.trusted_task_packet_result_transition_commit_verification(
+                    "ftic-governance-1"
+                )
 
     def test_trusted_result_transition_advance_rejects_human_gate_without_mutation(
         self,
