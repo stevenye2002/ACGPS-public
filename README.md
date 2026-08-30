@@ -599,6 +599,29 @@ as `NOT_GRANTED`: it does not write state, create a decision, authorize release,
 or reserve a later transition. `task advance` always revalidates current state
 and evidence when an operator separately authorizes the transition.
 
+After a separately authorized `VERIFIED -> RC_READY` transition commits, an
+operator can verify the authoritative committed transition without supplying a
+replacement manifest:
+
+```powershell
+python -m acgps rc task-transition-commit-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The command requires the trusted audit tail to be exactly a Verifier-authored
+`VERIFIED -> RC_READY` transition with one bound release-candidate manifest. It
+revalidates that manifest against its audit path, size, SHA-256, current task
+identity, and latest trusted `VERIFIED` evidence lineage, then repeats the
+evidence and state/audit identity checks before returning. It opens the
+workflow controller read-only and does not write state, advance the workflow,
+run a model or subprocess, or authorize publishing or release. Its result
+asserts the existing manifest contract; it does not add stronger byte-identity
+claims for manifest references that the current contract records only by path.
+
 A verified task that does not require a release candidate can instead use the
 existing direct `VERIFIED -> CLOSED` policy path. Use `task gate-preview` with
 actor `CONTROLLER` and provide the exact canonical Verifier packet, Verifier

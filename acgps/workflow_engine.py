@@ -1692,6 +1692,117 @@ class WorkflowEngine:
             },
         }
 
+    def rc_ready_transition_commit_verification(
+        self,
+        task_id: str,
+    ) -> dict[str, Any]:
+        current = self.status(task_id)
+        trusted_lineage = self._trusted_audit_lineage(current)
+        trusted_lineage_identity = self._canonical_sha(trusted_lineage)
+        self._require_task_state_audit_tail_binding(current, trusted_lineage)
+        tail = trusted_lineage[-1]
+        if (
+            tail["event_type"] != "TRANSITION_ACCEPTED"
+            or tail["from_state"] != "VERIFIED"
+            or tail["to_state"] != "RC_READY"
+            or tail["actor"] != "VERIFIER"
+            or self._required_transition_actor("VERIFIED", "RC_READY") != "VERIFIER"
+            or self._gate_evidence_kind("VERIFIED", "RC_READY")
+            != "RELEASE_CANDIDATE_MANIFEST"
+        ):
+            raise WorkflowEngineError(
+                "authoritative audit tail is not a committed VERIFIED to RC_READY transition"
+            )
+        bindings = tail["evidence_bindings"]
+        if (
+            len(bindings) != 1
+            or bindings[0].get("evidence_kind") != "transition_rc_ready"
+        ):
+            raise WorkflowEngineError(
+                "committed RC_READY transition requires exactly one bound manifest"
+            )
+        manifest_binding = bindings[0]
+        manifest_path = self._bound_evidence_path(manifest_binding)
+        _, manifest_snapshot = self._read_bound_evidence_json_snapshot(manifest_binding)
+        expected_snapshot = (
+            manifest_binding["path"],
+            manifest_binding["size_bytes"],
+            manifest_binding["content_sha256"],
+        )
+        validated_snapshots = self._validate_gate_evidence(
+            "RC_READY",
+            [manifest_path],
+            current,
+            source_state="VERIFIED",
+        )
+        if manifest_snapshot != expected_snapshot or validated_snapshots != [expected_snapshot]:
+            raise WorkflowEngineError(
+                "committed RC_READY manifest does not match its audit binding"
+            )
+
+        _, final_manifest_snapshot = self._read_bound_evidence_json_snapshot(
+            manifest_binding
+        )
+        final_current = self.status(task_id)
+        final_lineage = self._trusted_audit_lineage(final_current)
+        self._require_task_state_audit_tail_binding(final_current, final_lineage)
+        if (
+            final_manifest_snapshot != expected_snapshot
+            or final_current != current
+            or self._canonical_sha(final_lineage) != trusted_lineage_identity
+            or final_lineage[-1] != tail
+        ):
+            raise WorkflowEngineError(
+                "RC_READY transition commit identity changed during verification"
+            )
+        final_validated_snapshots = self._validate_gate_evidence(
+            "RC_READY",
+            [manifest_path],
+            current,
+            source_state="VERIFIED",
+        )
+        completed_current = self.status(task_id)
+        completed_lineage = self._trusted_audit_lineage(completed_current)
+        self._require_task_state_audit_tail_binding(
+            completed_current,
+            completed_lineage,
+        )
+        if (
+            final_validated_snapshots != [expected_snapshot]
+            or completed_current != current
+            or self._canonical_sha(completed_lineage) != trusted_lineage_identity
+            or completed_lineage[-1] != tail
+        ):
+            raise WorkflowEngineError(
+                "RC_READY transition commit identity changed during verification"
+            )
+
+        return {
+            "status": "RC_READY_TRANSITION_COMMIT_VERIFIED",
+            "task_id": current["task_id"],
+            "project_id": current["project_id"],
+            "current_state": current["current_state"],
+            "transition_id": tail["transition_id"],
+            "from_state": tail["from_state"],
+            "to_state": tail["to_state"],
+            "actor": tail["actor"],
+            "manifest_path": manifest_binding["path"],
+            "manifest_sha256": manifest_binding["content_sha256"],
+            "manifest_size_bytes": manifest_binding["size_bytes"],
+            "audit_generation": current["audit_generation"],
+            "audit_head_event_id": current["audit_head_event_id"],
+            "audit_head_hash": current["audit_head_hash"],
+            "state_identity_status": "UNCHANGED_DURING_QUERY",
+            "audit_identity_status": "UNCHANGED_DURING_QUERY",
+            "evidence_identity_status": "REVALIDATED",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _prepare_transition_validation(
         self,
         task_id: str,

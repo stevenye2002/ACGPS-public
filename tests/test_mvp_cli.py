@@ -2654,6 +2654,39 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(state["current_state"], "RC_READY")
 
+        state_root_before_commit_verification = self._state_root_identity(self.state_root)
+        commit_verification = self._run(
+            "rc",
+            "task-transition-commit-verify",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+        self.assertEqual(
+            commit_verification["status"],
+            "RC_READY_TRANSITION_COMMIT_VERIFIED",
+        )
+        self.assertEqual(commit_verification["current_state"], "RC_READY")
+        self.assertEqual(commit_verification["from_state"], "VERIFIED")
+        self.assertEqual(commit_verification["to_state"], "RC_READY")
+        self.assertEqual(commit_verification["actor"], "VERIFIER")
+        self.assertEqual(
+            commit_verification["manifest_sha256"],
+            hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        )
+        self.assertEqual(
+            commit_verification["controls"]["state_write"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(
+            commit_verification["controls"]["workflow_transition"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(
+            self._state_root_identity(self.state_root),
+            state_root_before_commit_verification,
+        )
+
         status = self._run(
             "task",
             "status",
