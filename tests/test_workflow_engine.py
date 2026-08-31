@@ -3184,6 +3184,66 @@ class WorkflowEngineTests(unittest.TestCase):
             )
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_next_action_queue_verification_rejects_boolean_integer_confusion(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_next_action_queue()
+            captured["task_count"] = True
+            capture_path = state_root / "project-next-action-queue.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured project next-action queue does not match current trusted project state",
+            ):
+                reader.trusted_project_next_action_queue_verification(capture_path)
+
+    def test_trusted_project_next_action_queue_verification_rejects_float_integer_confusion(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_next_action_queue()
+            captured["state_counts"]["DRAFT"] = 1.0
+            capture_path = state_root / "project-next-action-queue.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured project next-action queue does not match current trusted project state",
+            ):
+                reader.trusted_project_next_action_queue_verification(capture_path)
+
     def test_trusted_project_next_action_queue_verification_rejects_ambiguous_json_keys(
         self,
     ) -> None:

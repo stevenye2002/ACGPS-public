@@ -1522,7 +1522,9 @@ class WorkflowEngine:
             queue_path
         )
         current = self.trusted_project_next_action_queue()
-        if captured != current:
+        captured_canonical = canonical_json_bytes(captured)
+        current_canonical = canonical_json_bytes(current)
+        if captured_canonical != current_canonical:
             raise WorkflowEngineError(
                 "captured project next-action queue does not match current trusted project state"
             )
@@ -1530,12 +1532,15 @@ class WorkflowEngine:
         final_captured, final_captured_snapshot = (
             self._read_strict_evidence_json_snapshot(queue_path)
         )
-        if final_captured != captured or final_captured_snapshot != captured_snapshot:
+        if (
+            canonical_json_bytes(final_captured) != captured_canonical
+            or final_captured_snapshot != captured_snapshot
+        ):
             raise WorkflowEngineError(
                 "captured project next-action queue identity changed during verification"
             )
         final_current = self.trusted_project_next_action_queue()
-        if final_current != current:
+        if canonical_json_bytes(final_current) != current_canonical:
             raise WorkflowEngineError(
                 "trusted project next-action queue changed during verification"
             )
