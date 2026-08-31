@@ -4,6 +4,12 @@
 
 Create an independent **AI Coding Good Practice System** that automates the disciplined development of complex software—from idea and approved product intent through specification, architecture, planning, implementation, verification, independent review, release-candidate preparation, and operation—while requesting human input only when human values, domain authority, risk acceptance, irreversible consequences, or external authorization are genuinely required.
 
+## Product position
+
+ACGPS is a runtime-neutral, evidence-bound assurance control plane for agentic software delivery. It binds human-approved intent and owns lifecycle authority, workflow state, candidate and evidence identity, independent review and verification gates, auditability, convergence, and human release-authorization records. It may consume execution facts from external agent runtimes, but runtime completion, model output, process exit, or runtime approval does not authorize an ACGPS state transition.
+
+ACGPS is not a general-purpose agent harness or agent operating system. Agent loops, model and tool invocation, session and context management, concrete sandboxing, and multi-agent scheduling remain responsibilities of external runtimes. Compatibility is provided only through narrow, contract-preserving integration boundaries that cannot self-approve work or authorize workflow transitions.
+
 ## Primary users
 
 - A human Product & Risk Owner managing several complex AI-assisted projects.
@@ -32,7 +38,7 @@ ACGPS must support research-heavy and decision-intensive projects such as:
 7. Low-token cross-session continuity through concise authoritative files.
 8. Reusable project profiles without embedding domain logic in the ACGPS core.
 9. Frozen review and release baselines with traceable hashes.
-10. Progressive evolution from CLI orchestration to optional multi-agent automation.
+10. Progressive compatibility with qualified external agent runtimes through narrow, contract-preserving integration boundaries.
 
 ## Success definition
 

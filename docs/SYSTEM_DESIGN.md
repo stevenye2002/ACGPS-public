@@ -67,6 +67,14 @@ default, and outside the v1.0 core release claim. Direct autonomous model
 orchestration remains deferred, preserving separation between the workflow
 contract and any subscription, model, or vendor.
 
+### 4.1 Responsibility boundary
+
+ACGPS owns approved-intent binding, policy and lifecycle authority, workflow state, candidate and evidence identity, independent review and verification gates, audit records, and human release-authorization records. The workflow controller remains the only component that may authorize an ACGPS state transition.
+
+External execution runtimes own agent and model loops, tool invocation, session and context management, concrete sandbox enforcement, and multi-agent scheduling. Their completion states, logs, results, process exits, and approvals are evidence inputs rather than ACGPS authority.
+
+An integration adapter may map existing ACGPS task, result, and evidence contracts to an external runtime and report the execution facts that runtime can support. It may not approve its own output, reinterpret missing runtime evidence as stronger assurance, or authorize a workflow transition. Any new adapter capability or contract change requires a separately approved design and qualification gate.
+
 ## 5. Security boundaries
 
 - ACGPS may inspect repositories and execute configured validation commands.
@@ -86,4 +94,4 @@ contract and any subscription, model, or vendor.
 
 ## 7. Extensibility
 
-Adapters may later invoke model APIs, Figma, browser QA, security scanners, GitHub, deployment systems, or project-specific agents. All adapters must preserve the same role, evidence, and authorization contracts.
+Adapters may connect ACGPS to external execution runtimes and project tools, but they remain contract-preserving translators and evidence collectors. Vendor-specific invocation, sandbox, session, model, and multi-agent behavior remains outside the ACGPS core, and every adapter must preserve the same role, evidence, and authorization contracts.
