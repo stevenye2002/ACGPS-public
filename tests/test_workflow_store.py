@@ -302,6 +302,49 @@ class WorkflowStoreTests(unittest.TestCase):
                 [event],
             )
 
+    def test_read_task_states_returns_validated_authoritative_rows_in_task_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            state_b = valid_task_state(
+                task_id="task-b",
+                audit_head_event_id="event-b",
+                audit_head_hash="b" * 64,
+            )
+            state_a = valid_task_state(
+                task_id="task-a",
+                audit_head_event_id="event-a",
+                audit_head_hash="a" * 64,
+            )
+            store.write_task_state(state_b)
+            store.write_task_state(state_a)
+            store.state_path("task-a").write_text(
+                json.dumps(dict(state_a, current_state="PLAN_READY")) + "\n",
+                encoding="utf-8",
+            )
+
+            result = WorkflowStore(store.state_root, read_only=True).read_task_states()
+
+            self.assertEqual(result, [state_a, state_b])
+
+    def test_read_task_states_rejects_any_corrupt_authoritative_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkflowStore(Path(tmp) / "state")
+            store.write_task_state(valid_task_state())
+            connection = sqlite3.connect(store.control_store_path)
+            try:
+                connection.execute(
+                    "UPDATE task_states SET state_json = ? WHERE task_id = ?",
+                    ('{"schema_version":1}', "task-1"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(WorkflowStoreError) as corrupt:
+                WorkflowStore(store.state_root).read_task_states()
+
+            self.assertEqual(corrupt.exception.issue.code, "WORKFLOW_STATE_CORRUPT")
+
     def test_atomic_state_and_audit_commit_accepts_exact_successor_and_replay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = WorkflowStore(Path(tmp) / "state")

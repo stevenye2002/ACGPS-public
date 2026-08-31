@@ -1681,6 +1681,30 @@ class WorkflowStore:
             _raise("WORKFLOW_STATE_CORRUPT", "task_state.task_id", "task-state payload must match requested task_id")
         return payload
 
+    def read_task_states(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT task_id, state_json FROM task_states ORDER BY task_id"
+            ).fetchall()
+        states: list[dict[str, Any]] = []
+        for task_id, state_json in rows:
+            payload = _loads_json_mapping(
+                state_json,
+                code="WORKFLOW_STATE_CORRUPT",
+                issue_path="task_state",
+            )
+            outcome = validate_task_state(payload)
+            if not outcome.valid:
+                _raise_outcome(outcome)
+            if payload.get("task_id") != task_id:
+                _raise(
+                    "WORKFLOW_STATE_CORRUPT",
+                    "task_state.task_id",
+                    "task-state row identity mismatch",
+                )
+            states.append(payload)
+        return states
+
     def read_waiting_human_decisions(self) -> dict[str, str]:
         with self._connection() as connection:
             rows = connection.execute("SELECT task_id, state_json FROM task_states ORDER BY task_id").fetchall()

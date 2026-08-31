@@ -1238,6 +1238,46 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_reports_trusted_project_progress_without_state_writes(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        first_intake = valid_intake()
+        second_intake = dict(
+            first_intake,
+            task_id="ftic-governance-2",
+            title="Second bounded FTIC governance task",
+            created_at_utc="2026-08-23T00:10:00Z",
+        )
+        engine.intake(first_intake)
+        engine.intake(second_intake)
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project",
+            "progress-summary",
+            *self._engine_arguments(),
+        )
+
+        self.assertEqual(result["status"], "TRUSTED_PROJECT_PROGRESS_SUMMARY")
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["task_count"], 2)
+        self.assertEqual(result["state_counts"], {"DRAFT": 2})
+        self.assertEqual(
+            [task["task_id"] for task in result["tasks"]],
+            ["ftic-governance-1", "ftic-governance-2"],
+        )
+        self.assertEqual(result["controls"]["model_execution"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_previews_validated_direct_transition_gate_without_state_writes(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 

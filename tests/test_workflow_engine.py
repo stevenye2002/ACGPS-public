@@ -2986,6 +2986,180 @@ class WorkflowEngineTests(unittest.TestCase):
             ):
                 reader.trusted_task_progress_summary("ftic-governance-1")
 
+    def test_trusted_project_progress_summary_composes_all_project_tasks_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            first_intake = valid_intake()
+            second_intake = dict(
+                first_intake,
+                task_id="ftic-governance-2",
+                title="Second bounded FTIC governance task",
+                created_at_utc="2026-08-23T00:10:00Z",
+            )
+            writer.intake(first_intake)
+            writer.intake(second_intake)
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            result = reader.trusted_project_progress_summary()
+
+            self.assertEqual(result["status"], "TRUSTED_PROJECT_PROGRESS_SUMMARY")
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_count"], 2)
+            self.assertEqual(result["state_counts"], {"DRAFT": 2})
+            self.assertEqual(
+                [task["task_id"] for task in result["tasks"]],
+                ["ftic-governance-1", "ftic-governance-2"],
+            )
+            self.assertTrue(
+                all(
+                    task["status"] == "TRUSTED_TASK_PROGRESS_SUMMARY"
+                    for task in result["tasks"]
+                )
+            )
+            self.assertEqual(
+                result["control_store_authority"],
+                {
+                    "authority_id": reader.store.control_authority_id,
+                    "authority_generation": reader.store.control_authority_generation,
+                },
+            )
+            self.assertEqual(
+                result["task_set_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_progress_summary_reports_empty_project(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).trusted_project_progress_summary()
+
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_count"], 0)
+            self.assertEqual(result["state_counts"], {})
+            self.assertEqual(result["tasks"], [])
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_progress_summary_excludes_other_project_tasks(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            current = writer.intake(valid_intake())
+            writer.store.write_task_state(
+                dict(
+                    current,
+                    task_id="other-project-task",
+                    project_id="OTHER",
+                    audit_head_event_id="evt-other-project-task-0001",
+                    audit_head_hash="3" * 64,
+                )
+            )
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).trusted_project_progress_summary()
+
+            self.assertEqual(result["task_count"], 1)
+            self.assertEqual(
+                [task["task_id"] for task in result["tasks"]],
+                ["ftic-governance-1"],
+            )
+
+    def test_trusted_project_progress_summary_rejects_enumerated_task_identity_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            changed = reader.trusted_task_progress_summary("ftic-governance-1")
+            changed = dict(changed, current_state="CLASSIFIED")
+
+            with patch.object(
+                reader,
+                "trusted_task_progress_summary",
+                return_value=changed,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "project task identity changed during progress summary",
+            ):
+                reader.trusted_project_progress_summary()
+
+    def test_trusted_project_progress_summary_rejects_task_set_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            initial = reader.store.read_task_states()
+            changed = [
+                *initial,
+                dict(
+                    initial[0],
+                    task_id="ftic-governance-2",
+                    audit_head_event_id="evt-ftic-governance-2-0001",
+                    audit_head_hash="2" * 64,
+                ),
+            ]
+
+            with patch.object(
+                reader.store,
+                "read_task_states",
+                side_effect=[initial, changed],
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "project task set identity changed during progress summary",
+            ):
+                reader.trusted_project_progress_summary()
+
     def test_next_action_preview_derives_existing_plan_ready_contract_without_mutation(
         self,
     ) -> None:

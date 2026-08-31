@@ -34,6 +34,29 @@ python scripts/check.py setup
 python scripts/check.py full
 ```
 
+## Trusted project progress summary
+
+An operator can obtain one read-only summary of every task owned by the selected
+project profile:
+
+```powershell
+python -m acgps project progress-summary `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID
+```
+
+The command enumerates authoritative task-state rows in stable task-ID order,
+selects tasks whose project identity matches the profile, and composes each from
+the existing trusted audit-lineage and next-action summaries. It reports state
+counts, the fixed control-store authority identity and generation, and the
+per-task summaries. It fails closed if any authoritative task row is corrupt, if a task
+summary does not match its enumerated state, or if the selected task set changes
+during the query. The bounded revalidation window is not a global filesystem
+snapshot. The command writes JSON only to stdout and does not write workflow
+state, authorize a transition, or launch a model or process.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

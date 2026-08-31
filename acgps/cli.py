@@ -127,6 +127,8 @@ def _build_parser() -> argparse.ArgumentParser:
     project_commands = project.add_subparsers(dest="command", required=True)
     project_validate = project_commands.add_parser("validate")
     _add_project_arguments(project_validate, include_state=False)
+    project_progress_summary = project_commands.add_parser("progress-summary")
+    _add_project_arguments(project_progress_summary, include_state=True)
 
     task = commands.add_parser("task")
     task_commands = task.add_subparsers(dest="command", required=True)
@@ -437,6 +439,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             "project_root": str(Path(args.project_root).resolve(strict=True)),
             "required_files": {key: str(value) for key, value in sorted(required_files.items())},
         }
+
+    if args.group == "project" and args.command == "progress-summary":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_project_progress_summary()
 
     if args.group == "task" and args.command == "intake":
         return _engine(args).intake(_read_mapping(Path(args.intake)), actor=args.actor)

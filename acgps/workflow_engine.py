@@ -1435,6 +1435,69 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_project_progress_summary(self) -> dict[str, Any]:
+        project_id = self.profile["project_name"]
+        try:
+            initial_states = [
+                state
+                for state in self.store.read_task_states()
+                if state["project_id"] == project_id
+            ]
+        except WorkflowStoreError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+
+        identity_fields = (
+            "task_id",
+            "project_id",
+            "current_state",
+            "audit_generation",
+            "audit_head_event_id",
+            "audit_head_hash",
+        )
+        summaries: list[dict[str, Any]] = []
+        state_counts: dict[str, int] = {}
+        for state in initial_states:
+            summary = self.trusted_task_progress_summary(state["task_id"])
+            if any(summary[field] != state[field] for field in identity_fields):
+                raise WorkflowEngineError(
+                    "project task identity changed during progress summary"
+                )
+            summaries.append(summary)
+            current_state = state["current_state"]
+            state_counts[current_state] = state_counts.get(current_state, 0) + 1
+
+        try:
+            final_states = [
+                state
+                for state in self.store.read_task_states()
+                if state["project_id"] == project_id
+            ]
+        except WorkflowStoreError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        if final_states != initial_states:
+            raise WorkflowEngineError(
+                "project task set identity changed during progress summary"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_PROGRESS_SUMMARY",
+            "project_id": project_id,
+            "task_count": len(summaries),
+            "state_counts": dict(sorted(state_counts.items())),
+            "tasks": summaries,
+            "control_store_authority": {
+                "authority_id": self.store.control_authority_id,
+                "authority_generation": self.store.control_authority_generation,
+            },
+            "task_set_identity_status": "UNCHANGED_DURING_QUERY",
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _pending_decision_requirement(
         self,
         current: dict[str, Any],
