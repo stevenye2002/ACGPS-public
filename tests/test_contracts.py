@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 import configparser
+import runpy
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 from acgps.contracts import (
@@ -1376,6 +1383,53 @@ class RuntimeSemanticValidationTests(unittest.TestCase):
             validate_contract("missing_contract", {"schema_version": 1})
         with self.assertRaises(UnsupportedContractVersionError):
             validate_contract("task_intake", {"schema_version": 99})
+
+
+class PublicSpecValidationEntrypointTests(unittest.TestCase):
+    def _load_entrypoint(self) -> dict[str, object]:
+        script_path = ROOT / "scripts" / "validate_spec.py"
+        self.assertTrue(script_path.is_file(), "public spec validation entrypoint is missing")
+        return runpy.run_path(str(script_path))
+
+    def test_entrypoint_validates_repository_policies_profiles_and_templates(self) -> None:
+        script_path = ROOT / "scripts" / "validate_spec.py"
+        completed = subprocess.run(
+            [sys.executable, "-B", str(script_path)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout.strip(),
+            "SPEC_VALIDATION_OK policies=6 profiles=1 templates=8",
+        )
+        self.assertEqual(completed.stderr, "")
+
+    def test_entrypoint_fails_closed_for_invalid_template(self) -> None:
+        entrypoint = self._load_entrypoint()
+        main = entrypoint["main"]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for directory in ("config", "project_profiles", "templates"):
+                shutil.copytree(ROOT / directory, root / directory)
+            template_path = root / "templates" / "TASK_INTAKE.yaml"
+            template_path.write_text(
+                template_path.read_text(encoding="utf-8") + "\nunexpected_field: true\n",
+                encoding="utf-8",
+            )
+
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                returncode = main(root)
+
+        self.assertEqual(returncode, 1)
+        self.assertIn("SPEC_VALIDATION_FAILED", stderr.getvalue())
+        self.assertIn("templates/TASK_INTAKE.yaml", stderr.getvalue())
+        self.assertIn("unexpected_field", stderr.getvalue())
 
 
 if __name__ == "__main__":
