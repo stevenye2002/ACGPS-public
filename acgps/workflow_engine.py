@@ -1514,6 +1514,46 @@ class WorkflowEngine:
             "controls": summary["controls"],
         }
 
+    def trusted_project_next_action_queue_verification(
+        self,
+        queue_path: Path,
+    ) -> dict[str, Any]:
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            queue_path
+        )
+        current = self.trusted_project_next_action_queue()
+        if captured != current:
+            raise WorkflowEngineError(
+                "captured project next-action queue does not match current trusted project state"
+            )
+
+        final_captured, final_captured_snapshot = (
+            self._read_strict_evidence_json_snapshot(queue_path)
+        )
+        if final_captured != captured or final_captured_snapshot != captured_snapshot:
+            raise WorkflowEngineError(
+                "captured project next-action queue identity changed during verification"
+            )
+        final_current = self.trusted_project_next_action_queue()
+        if final_current != current:
+            raise WorkflowEngineError(
+                "trusted project next-action queue changed during verification"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_NEXT_ACTION_QUEUE_VERIFIED",
+            "project_id": current["project_id"],
+            "task_count": current["task_count"],
+            "state_counts": current["state_counts"],
+            "captured_queue_path": captured_snapshot[0],
+            "captured_queue_size_bytes": captured_snapshot[1],
+            "captured_queue_sha256": captured_snapshot[2],
+            "captured_queue_identity_status": "UNCHANGED_DURING_QUERY",
+            "current_queue_identity_status": "UNCHANGED_DURING_QUERY",
+            "control_store_authority": current["control_store_authority"],
+            "controls": current["controls"],
+        }
+
     def _pending_decision_requirement(
         self,
         current: dict[str, Any],
@@ -3668,7 +3708,7 @@ class WorkflowEngine:
         return resolved
 
     @staticmethod
-    def _parse_canonical_evidence_json(
+    def _parse_strict_evidence_json(
         payload: bytes,
         path: Path,
     ) -> dict[str, Any]:
@@ -3695,6 +3735,14 @@ class WorkflowEngine:
             raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
         if not isinstance(record, dict):
             raise WorkflowEngineError(f"evidence must be a mapping: {path}")
+        return record
+
+    @staticmethod
+    def _parse_canonical_evidence_json(
+        payload: bytes,
+        path: Path,
+    ) -> dict[str, Any]:
+        record = WorkflowEngine._parse_strict_evidence_json(payload, path)
         if canonical_json_bytes(record) + b"\n" != payload:
             raise WorkflowEngineError(
                 f"evidence must use canonical JSON bytes with one terminal LF: {path}"
@@ -3713,6 +3761,18 @@ class WorkflowEngine:
             raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
         if not isinstance(record, dict):
             raise WorkflowEngineError(f"evidence must be a mapping: {path}")
+        return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
+
+    def _read_strict_evidence_json_snapshot(
+        self,
+        path: Path,
+    ) -> tuple[dict[str, Any], tuple[str, int, str]]:
+        logical_path, resolved = self._evidence_location(path)
+        try:
+            payload = resolved.read_bytes()
+        except OSError as exc:
+            raise WorkflowEngineError(f"evidence is unreadable: {path}") from exc
+        record = self._parse_strict_evidence_json(payload, path)
         return record, (logical_path, len(payload), hashlib.sha256(payload).hexdigest())
 
     @staticmethod

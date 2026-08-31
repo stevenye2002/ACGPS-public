@@ -131,6 +131,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_project_arguments(project_progress_summary, include_state=True)
     project_next_action_queue = project_commands.add_parser("next-action-queue")
     _add_project_arguments(project_next_action_queue, include_state=True)
+    project_next_action_queue_verify = project_commands.add_parser(
+        "next-action-queue-verify"
+    )
+    _add_project_arguments(project_next_action_queue_verify, include_state=True)
+    project_next_action_queue_verify.add_argument("--queue", required=True)
 
     task = commands.add_parser("task")
     task_commands = task.add_subparsers(dest="command", required=True)
@@ -459,6 +464,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).trusted_project_next_action_queue()
+
+    if args.group == "project" and args.command == "next-action-queue-verify":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_project_next_action_queue_verification(Path(args.queue))
 
     if args.group == "task" and args.command == "intake":
         return _engine(args).intake(_read_mapping(Path(args.intake)), actor=args.actor)

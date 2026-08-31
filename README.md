@@ -76,6 +76,25 @@ queue item is the existing task next-action preview, including terminal tasks
 whose legal `options` list is empty. It does not prioritize tasks, select or
 authorize a transition, launch a model or process, or write workflow state.
 
+To verify a previously captured UTF-8 queue against the current trusted project
+state, keep the capture beneath the managed project or ACGPS state root and run:
+
+```powershell
+python -m acgps project next-action-queue-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --queue path/to/project-next-action-queue.json
+```
+
+The verifier rejects ambiguous JSON keys, requires an exact semantic match with
+the current trusted queue, and rechecks both the captured bytes and current
+queue before returning their bounded identity status. It reports the capture's
+path, size, and SHA-256 without writing workflow state, authorizing a
+transition, or launching a model or process. The result covers the verification
+window; it is not a global filesystem snapshot.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet
