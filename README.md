@@ -219,6 +219,28 @@ the verified task identity, generation and event counts, and audit head; it
 does not return the full audit transcript, launch a model or process, write
 state, or authorize a workflow transition.
 
+## Trusted task progress summary
+
+An operator can combine the current trusted audit identity with the existing
+next-action preview in one read-only progress report:
+
+```powershell
+python -m acgps task progress-summary `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --task-id TASK_ID
+```
+
+The command verifies the complete audit lineage and derives the current legal
+next actions, including any authoritative pending human-decision requirement.
+It then repeats both reads and fails closed if the task, audit, or pending
+decision identity changed during the summary. The consistency guarantee is
+limited to this bounded revalidation window; it is not a global filesystem
+snapshot. The command writes JSON only to stdout and does not write workflow
+state, authorize a transition, or launch a model or process.
+
 ## Supervised planner handoff preview
 
 Before choosing a workflow transition, an operator can inspect the current

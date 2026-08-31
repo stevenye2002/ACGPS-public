@@ -1201,6 +1201,43 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_reports_trusted_task_progress_without_state_writes(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        current = engine.intake(valid_intake())
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "task",
+            "progress-summary",
+            *self._engine_arguments(),
+            "--task-id",
+            "ftic-governance-1",
+        )
+
+        self.assertEqual(result["status"], "TRUSTED_TASK_PROGRESS_SUMMARY")
+        self.assertEqual(result["current_state"], "DRAFT")
+        self.assertEqual(result["audit_head_hash"], current["audit_head_hash"])
+        self.assertEqual(
+            result["audit_verification"]["status"],
+            "AUDIT_LINEAGE_VERIFIED",
+        )
+        self.assertEqual(
+            result["next_action_preview"]["status"],
+            "NEXT_ACTION_PREVIEW",
+        )
+        self.assertEqual(result["controls"]["model_execution"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_previews_validated_direct_transition_gate_without_state_writes(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 

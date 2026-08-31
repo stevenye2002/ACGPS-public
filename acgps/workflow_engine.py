@@ -1380,6 +1380,61 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_task_progress_summary(self, task_id: str) -> dict[str, Any]:
+        initial_audit = self.audit_lineage_verification(task_id)
+        initial_preview = self.next_action_preview(task_id)
+        identity_fields = (
+            "task_id",
+            "project_id",
+            "current_state",
+            "audit_generation",
+            "audit_head_event_id",
+            "audit_head_hash",
+        )
+        if any(
+            initial_audit[field] != initial_preview[field]
+            for field in identity_fields
+        ):
+            raise WorkflowEngineError(
+                "progress summary components do not share one task and audit identity"
+            )
+
+        final_audit = self.audit_lineage_verification(task_id)
+        if final_audit != initial_audit:
+            raise WorkflowEngineError(
+                "audit lineage identity changed during task progress summary"
+            )
+        final_preview = self.next_action_preview(task_id)
+        if any(
+            final_audit[field] != final_preview[field]
+            for field in identity_fields
+        ):
+            raise WorkflowEngineError(
+                "progress summary components do not share one task and audit identity"
+            )
+        if final_preview != initial_preview:
+            raise WorkflowEngineError(
+                "next action identity changed during task progress summary"
+            )
+
+        return {
+            "status": "TRUSTED_TASK_PROGRESS_SUMMARY",
+            "task_id": final_audit["task_id"],
+            "project_id": final_audit["project_id"],
+            "current_state": final_audit["current_state"],
+            "audit_generation": final_audit["audit_generation"],
+            "audit_head_event_id": final_audit["audit_head_event_id"],
+            "audit_head_hash": final_audit["audit_head_hash"],
+            "audit_verification": final_audit,
+            "next_action_preview": final_preview,
+            "controls": {
+                "model_execution": "NOT_STARTED",
+                "process_launch": "NOT_STARTED",
+                "state_write": "NOT_PERFORMED",
+                "workflow_transition": "NOT_PERFORMED",
+            },
+        }
+
     def _pending_decision_requirement(
         self,
         current: dict[str, Any],

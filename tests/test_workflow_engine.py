@@ -2795,6 +2795,197 @@ class WorkflowEngineTests(unittest.TestCase):
                 ):
                     reader.audit_lineage_verification("ftic-governance-1")
 
+    def test_trusted_task_progress_summary_composes_existing_read_only_contracts(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            current = writer.intake(valid_intake())
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).trusted_task_progress_summary("ftic-governance-1")
+
+            self.assertEqual(result["status"], "TRUSTED_TASK_PROGRESS_SUMMARY")
+            self.assertEqual(result["task_id"], "ftic-governance-1")
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["current_state"], "DRAFT")
+            self.assertEqual(result["audit_generation"], 1)
+            self.assertEqual(result["audit_head_event_id"], current["audit_head_event_id"])
+            self.assertEqual(result["audit_head_hash"], current["audit_head_hash"])
+            self.assertEqual(
+                result["audit_verification"]["status"],
+                "AUDIT_LINEAGE_VERIFIED",
+            )
+            self.assertEqual(
+                result["next_action_preview"]["status"],
+                "NEXT_ACTION_PREVIEW",
+            )
+            self.assertEqual(
+                [
+                    option["target_state"]
+                    for option in result["next_action_preview"]["options"]
+                ],
+                ["READY_FOR_CLASSIFICATION", "ABANDONED"],
+            )
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_task_progress_summary_binds_waiting_human_requirement(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=7)
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).trusted_task_progress_summary("ftic-governance-1")
+
+            self.assertEqual(result["current_state"], "WAITING_HUMAN")
+            self.assertEqual(
+                result["next_action_preview"]["pending_decision_requirement"],
+                {
+                    "decision_id": waiting["pending_decision_id"],
+                    "status": "PENDING",
+                    "required_resume_state": "SPEC_READY",
+                    "allowed_option_ids": ["RESUME"],
+                    "default_without_response": "PAUSE",
+                    "resolution_required": True,
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_task_progress_summary_reports_closed_as_terminal(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer, manifest_path = prepare_rc_ready_lineage(state_root)
+            writer.advance(
+                "ftic-governance-1",
+                "CLOSED",
+                actor="CONTROLLER",
+                evidence_paths=[manifest_path],
+                created_at_utc="2026-08-23T01:11:00Z",
+            )
+            before = tree_bytes(state_root)
+
+            result = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            ).trusted_task_progress_summary("ftic-governance-1")
+
+            self.assertEqual(result["current_state"], "CLOSED")
+            self.assertEqual(result["next_action_preview"]["options"], [])
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_task_progress_summary_rejects_component_identity_mismatch(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            preview = reader.next_action_preview("ftic-governance-1")
+            mismatched_preview = dict(preview, audit_head_hash="0" * 64)
+
+            with patch.object(
+                reader,
+                "next_action_preview",
+                return_value=mismatched_preview,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "progress summary components do not share one task and audit identity",
+            ):
+                reader.trusted_task_progress_summary("ftic-governance-1")
+
+    def test_trusted_task_progress_summary_rejects_final_audit_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            initial = reader.audit_lineage_verification("ftic-governance-1")
+            changed = dict(initial, trusted_event_count=initial["trusted_event_count"] + 1)
+
+            with patch.object(
+                reader,
+                "audit_lineage_verification",
+                side_effect=[initial, changed],
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "audit lineage identity changed during task progress summary",
+            ):
+                reader.trusted_task_progress_summary("ftic-governance-1")
+
+    def test_trusted_task_progress_summary_rejects_pending_decision_drift(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_waiting_human(writer, hour=7)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            initial = reader.next_action_preview("ftic-governance-1")
+            changed = json.loads(json.dumps(initial))
+            changed["pending_decision_requirement"]["default_without_response"] = "RESUME"
+
+            with patch.object(
+                reader,
+                "next_action_preview",
+                side_effect=[initial, changed],
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "next action identity changed during task progress summary",
+            ):
+                reader.trusted_task_progress_summary("ftic-governance-1")
+
     def test_next_action_preview_derives_existing_plan_ready_contract_without_mutation(
         self,
     ) -> None:

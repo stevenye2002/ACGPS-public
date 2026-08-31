@@ -148,6 +148,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_project_arguments(task_next_action_preview, include_state=True)
     task_next_action_preview.add_argument("--task-id", required=True)
 
+    task_progress_summary = task_commands.add_parser("progress-summary")
+    _add_project_arguments(task_progress_summary, include_state=True)
+    task_progress_summary.add_argument("--task-id", required=True)
+
     task_gate_preview = task_commands.add_parser("gate-preview")
     _add_project_arguments(task_gate_preview, include_state=True)
     task_gate_preview.add_argument("--task-id", required=True)
@@ -459,6 +463,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).next_action_preview(args.task_id)
+
+    if args.group == "task" and args.command == "progress-summary":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_task_progress_summary(args.task_id)
 
     if args.group == "task" and args.command == "gate-preview":
         return WorkflowEngine(
