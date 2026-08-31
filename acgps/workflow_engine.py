@@ -1498,6 +1498,51 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_project_progress_summary_verification(
+        self,
+        summary_path: Path,
+    ) -> dict[str, Any]:
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            summary_path
+        )
+        current = self.trusted_project_progress_summary()
+        captured_canonical = canonical_json_bytes(captured)
+        current_canonical = canonical_json_bytes(current)
+        if captured_canonical != current_canonical:
+            raise WorkflowEngineError(
+                "captured project progress summary does not match current trusted project state"
+            )
+
+        final_captured, final_captured_snapshot = (
+            self._read_strict_evidence_json_snapshot(summary_path)
+        )
+        if (
+            canonical_json_bytes(final_captured) != captured_canonical
+            or final_captured_snapshot != captured_snapshot
+        ):
+            raise WorkflowEngineError(
+                "captured project progress summary identity changed during verification"
+            )
+        final_current = self.trusted_project_progress_summary()
+        if canonical_json_bytes(final_current) != current_canonical:
+            raise WorkflowEngineError(
+                "trusted project progress summary changed during verification"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_PROGRESS_SUMMARY_VERIFIED",
+            "project_id": current["project_id"],
+            "task_count": current["task_count"],
+            "state_counts": current["state_counts"],
+            "captured_summary_path": captured_snapshot[0],
+            "captured_summary_size_bytes": captured_snapshot[1],
+            "captured_summary_sha256": captured_snapshot[2],
+            "captured_summary_identity_status": "UNCHANGED_DURING_QUERY",
+            "current_summary_identity_status": "UNCHANGED_DURING_QUERY",
+            "control_store_authority": current["control_store_authority"],
+            "controls": current["controls"],
+        }
+
     def trusted_project_next_action_queue(self) -> dict[str, Any]:
         summary = self.trusted_project_progress_summary()
         return {

@@ -57,6 +57,26 @@ during the query. The bounded revalidation window is not a global filesystem
 snapshot. The command writes JSON only to stdout and does not write workflow
 state, authorize a transition, or launch a model or process.
 
+To verify a previously captured UTF-8 project summary against the current
+trusted project state, keep the capture beneath the managed project or ACGPS
+state root and run:
+
+```powershell
+python -m acgps project progress-summary-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --summary path/to/project-progress-summary.json
+```
+
+The verifier rejects ambiguous JSON keys and type-confused values, requires an
+exact semantic match with the current trusted project summary, and rechecks
+both the captured bytes and current project summary before returning their
+bounded identity status. It reports the capture's path, size, and SHA-256 while
+remaining read-only. The result covers the verification window; it is not a
+global filesystem snapshot.
+
 ## Trusted project next-action queue
 
 An operator can project every task's existing trusted next-action preview into

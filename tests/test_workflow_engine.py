@@ -3065,6 +3065,258 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["tasks"], [])
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_progress_summary_verification_matches_capture_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_progress_summary()
+            capture_path = state_root / "captures" / "project-progress-summary.json"
+            capture_path.parent.mkdir(parents=True)
+            capture_bytes = (json.dumps(captured, sort_keys=True) + "\n").encode("utf-8")
+            capture_path.write_bytes(capture_bytes)
+            before = tree_bytes(state_root)
+
+            result = reader.trusted_project_progress_summary_verification(capture_path)
+
+            self.assertEqual(
+                result,
+                {
+                    "status": "TRUSTED_PROJECT_PROGRESS_SUMMARY_VERIFIED",
+                    "project_id": "FTIC",
+                    "task_count": 1,
+                    "state_counts": {"DRAFT": 1},
+                    "captured_summary_path": "state/captures/project-progress-summary.json",
+                    "captured_summary_size_bytes": len(capture_bytes),
+                    "captured_summary_sha256": hashlib.sha256(capture_bytes).hexdigest(),
+                    "captured_summary_identity_status": "UNCHANGED_DURING_QUERY",
+                    "current_summary_identity_status": "UNCHANGED_DURING_QUERY",
+                    "control_store_authority": captured["control_store_authority"],
+                    "controls": {
+                        "model_execution": "NOT_STARTED",
+                        "process_launch": "NOT_STARTED",
+                        "state_write": "NOT_PERFORMED",
+                        "workflow_transition": "NOT_PERFORMED",
+                    },
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_progress_summary_verification_preserves_json_types(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_progress_summary()
+            capture_path = state_root / "project-progress-summary.json"
+
+            for field_path, replacement in (
+                (("task_count",), True),
+                (("state_counts", "DRAFT"), 1.0),
+            ):
+                with self.subTest(field_path=field_path, replacement=replacement):
+                    changed = json.loads(json.dumps(captured))
+                    target = changed
+                    for field in field_path[:-1]:
+                        target = target[field]
+                    target[field_path[-1]] = replacement
+                    capture_path.write_text(
+                        json.dumps(changed, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        WorkflowEngineError,
+                        "captured project progress summary does not match current trusted project state",
+                    ):
+                        reader.trusted_project_progress_summary_verification(capture_path)
+
+    def test_trusted_project_progress_summary_verification_rejects_ambiguous_json_keys(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_progress_summary()
+            encoded_tail = json.dumps(captured, sort_keys=True)[1:]
+            capture_path = state_root / "project-progress-summary.json"
+
+            for ambiguous_key in ("status", "STATUS"):
+                with self.subTest(ambiguous_key=ambiguous_key):
+                    capture_path.write_text(
+                        f'{{"{ambiguous_key}":"TAMPERED",{encoded_tail}\n',
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        WorkflowEngineError,
+                        "duplicate or case-fold-colliding JSON key",
+                    ):
+                        reader.trusted_project_progress_summary_verification(capture_path)
+
+    def test_trusted_project_progress_summary_verification_rejects_stale_capture(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_progress_summary()
+            capture_path = state_root / "project-progress-summary.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            writer.intake(
+                dict(
+                    valid_intake(),
+                    task_id="ftic-governance-2",
+                    title="Second bounded FTIC governance task",
+                    created_at_utc="2026-08-23T00:10:00Z",
+                )
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured project progress summary does not match current trusted project state",
+            ):
+                reader.trusted_project_progress_summary_verification(capture_path)
+
+    def test_trusted_project_progress_summary_verification_rejects_capture_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_progress_summary()
+            capture_path = state_root / "project-progress-summary.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            read_snapshot = reader._read_strict_evidence_json_snapshot
+            read_count = 0
+
+            def mutate_after_first_read(path: Path):
+                nonlocal read_count
+                record, snapshot = read_snapshot(path)
+                read_count += 1
+                if read_count == 1:
+                    capture_path.write_text(
+                        json.dumps(dict(captured, task_count=2), sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                return record, snapshot
+
+            with patch.object(
+                reader,
+                "_read_strict_evidence_json_snapshot",
+                side_effect=mutate_after_first_read,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured project progress summary identity changed during verification",
+            ):
+                reader.trusted_project_progress_summary_verification(capture_path)
+
+    def test_trusted_project_progress_summary_verification_rejects_current_summary_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_progress_summary()
+            capture_path = state_root / "project-progress-summary.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            current_summary = reader.trusted_project_progress_summary
+            query_count = 0
+
+            def mutate_after_first_query():
+                nonlocal query_count
+                result = current_summary()
+                query_count += 1
+                if query_count == 1:
+                    writer.intake(
+                        dict(
+                            valid_intake(),
+                            task_id="ftic-governance-2",
+                            title="Second bounded FTIC governance task",
+                            created_at_utc="2026-08-23T00:10:00Z",
+                        )
+                    )
+                return result
+
+            with patch.object(
+                reader,
+                "trusted_project_progress_summary",
+                side_effect=mutate_after_first_query,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted project progress summary changed during verification",
+            ):
+                reader.trusted_project_progress_summary_verification(capture_path)
+
     def test_trusted_project_next_action_queue_projects_all_tasks_without_writes(
         self,
     ) -> None:
