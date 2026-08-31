@@ -57,6 +57,25 @@ during the query. The bounded revalidation window is not a global filesystem
 snapshot. The command writes JSON only to stdout and does not write workflow
 state, authorize a transition, or launch a model or process.
 
+## Trusted project next-action queue
+
+An operator can project every task's existing trusted next-action preview into
+one project-wide read-only queue:
+
+```powershell
+python -m acgps project next-action-queue `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID
+```
+
+The command preserves the trusted project summary's stable task-ID order,
+control-store authority, state counts, and final task-set identity check. Each
+queue item is the existing task next-action preview, including terminal tasks
+whose legal `options` list is empty. It does not prioritize tasks, select or
+authorize a transition, launch a model or process, or write workflow state.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

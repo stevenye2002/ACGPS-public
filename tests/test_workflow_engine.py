@@ -3065,6 +3065,77 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["tasks"], [])
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_next_action_queue_projects_all_tasks_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            first_intake = valid_intake()
+            second_intake = dict(
+                first_intake,
+                task_id="ftic-governance-2",
+                title="Second bounded FTIC governance task",
+                created_at_utc="2026-08-23T00:10:00Z",
+            )
+            writer.intake(first_intake)
+            writer.intake(second_intake)
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            result = reader.trusted_project_next_action_queue()
+
+            self.assertEqual(result["status"], "TRUSTED_PROJECT_NEXT_ACTION_QUEUE")
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_count"], 2)
+            self.assertEqual(result["state_counts"], {"DRAFT": 2})
+            self.assertEqual(
+                [item["task_id"] for item in result["queue"]],
+                ["ftic-governance-1", "ftic-governance-2"],
+            )
+            self.assertEqual(
+                [item["current_state"] for item in result["queue"]],
+                ["DRAFT", "DRAFT"],
+            )
+            self.assertEqual(
+                [
+                    [option["target_state"] for option in item["options"]]
+                    for item in result["queue"]
+                ],
+                [
+                    ["READY_FOR_CLASSIFICATION", "ABANDONED"],
+                    ["READY_FOR_CLASSIFICATION", "ABANDONED"],
+                ],
+            )
+            self.assertTrue(
+                all(item["authorization_status"] == "NOT_EVALUATED" for item in result["queue"])
+            )
+            self.assertTrue(
+                all(item["selected_transition"] is None for item in result["queue"])
+            )
+            self.assertEqual(
+                result["control_store_authority"],
+                {
+                    "authority_id": reader.store.control_authority_id,
+                    "authority_generation": reader.store.control_authority_generation,
+                },
+            )
+            self.assertEqual(
+                result["task_set_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
     def test_trusted_project_progress_summary_excludes_other_project_tasks(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 

@@ -1498,6 +1498,22 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_project_next_action_queue(self) -> dict[str, Any]:
+        summary = self.trusted_project_progress_summary()
+        return {
+            "status": "TRUSTED_PROJECT_NEXT_ACTION_QUEUE",
+            "project_id": summary["project_id"],
+            "task_count": summary["task_count"],
+            "state_counts": summary["state_counts"],
+            "queue": [
+                task["next_action_preview"]
+                for task in summary["tasks"]
+            ],
+            "control_store_authority": summary["control_store_authority"],
+            "task_set_identity_status": summary["task_set_identity_status"],
+            "controls": summary["controls"],
+        }
+
     def _pending_decision_requirement(
         self,
         current: dict[str, Any],
