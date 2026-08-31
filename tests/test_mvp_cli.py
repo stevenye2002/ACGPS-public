@@ -2404,7 +2404,7 @@ class MVPCLITests(unittest.TestCase):
             (
                 "INTEGRATING",
                 "REVIEWER",
-                [reviewer_packet_path, reviewer_result_path, review],
+                [reviewer_packet_path, reviewer_result_path],
             ),
             (
                 "VERIFIED",

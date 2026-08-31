@@ -2430,10 +2430,7 @@ class WorkflowEngine:
         if evidence_kind == "REVIEWER_RESULT":
             minimum_count = 3
             if target == "INTEGRATING":
-                minimum_count = 2 + max(
-                    1,
-                    len(self._current_fix_cycle_blocker_ids(current)),
-                )
+                minimum_count = 2 + len(self._current_fix_cycle_blocker_ids(current))
             return bound(
                 ["REVIEWER_TASK_PACKET", "REVIEWER_RESULT", "REVIEW_FINDING"],
                 minimum_count=minimum_count,
@@ -2945,7 +2942,8 @@ class WorkflowEngine:
         paths: list[Path],
         current: dict[str, Any],
     ) -> list[tuple[str, int, str]]:
-        if len(paths) < 3:
+        minimum_count = 3 if target == "FIX_REQUIRED" else 2
+        if len(paths) < minimum_count:
             raise WorkflowEngineError(
                 f"{target} from TASK_REVIEW requires the canonical REVIEWER packet and result "
                 "followed by review findings"
@@ -2969,10 +2967,18 @@ class WorkflowEngine:
             raise WorkflowEngineError(f"REVIEWER result must recommend {target}")
 
         finding_paths = paths[2:]
+        if (
+            target == "INTEGRATING"
+            and not finding_paths
+            and agent_result["status"] != "DONE"
+        ):
+            raise WorkflowEngineError(
+                "INTEGRATING with zero review findings requires reviewer status DONE"
+            )
         if target == "FIX_REQUIRED":
             records = validate_fix_required_findings(finding_paths)
         else:
-            records = validate_review_findings(finding_paths)
+            records = validate_review_findings(finding_paths) if finding_paths else []
             required_ids = self._current_fix_cycle_blocker_ids(current)
             closed_ids = {
                 record["finding_id"]

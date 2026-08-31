@@ -4082,6 +4082,82 @@ class WorkflowEngineTests(unittest.TestCase):
                     [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence_paths],
                 )
 
+    def test_task_review_accepts_zero_findings_when_reviewer_completes_without_blockers(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=19)
+            evidence_paths = write_reviewer_transition_evidence(
+                engine,
+                [],
+                target="INTEGRATING",
+            )
+
+            preview = engine.next_action_preview("ftic-governance-1")
+            integrating = next(
+                option
+                for option in preview["options"]
+                if option["target_state"] == "INTEGRATING"
+            )
+            self.assertEqual(integrating["evidence_contract"]["minimum_count"], 2)
+
+            state = engine.advance(
+                "ftic-governance-1",
+                "INTEGRATING",
+                actor="REVIEWER",
+                evidence_paths=evidence_paths,
+                created_at_utc="2026-08-23T19:07:00Z",
+            )
+
+            self.assertEqual(state["current_state"], "INTEGRATING")
+            self.assertEqual(
+                [
+                    binding["content_sha256"]
+                    for binding in engine.audit("ftic-governance-1")[-1][
+                        "evidence_bindings"
+                    ]
+                ],
+                [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence_paths],
+            )
+
+    def test_task_review_zero_findings_requires_done_reviewer_result(self) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            engine = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_task_review(engine, hour=19)
+            reviewer_result = dict(
+                valid_reviewer_result(recommended_next_state="INTEGRATING"),
+                status="DONE_WITH_CONCERNS",
+                concerns=["A non-blocking concern remains."],
+            )
+            evidence_paths = write_reviewer_transition_evidence(
+                engine,
+                [],
+                target="INTEGRATING",
+                result=reviewer_result,
+            )
+            before = tree_bytes(state_root)
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "zero review findings requires reviewer status DONE",
+            ):
+                engine.advance(
+                    "ftic-governance-1",
+                    "INTEGRATING",
+                    actor="REVIEWER",
+                    evidence_paths=evidence_paths,
+                    created_at_utc="2026-08-23T19:07:00Z",
+                )
+
+            self.assertEqual(tree_bytes(state_root), before)
+
     def test_task_review_rejects_unbound_or_invalid_reviewer_result_without_mutation(self) -> None:
         from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
 
