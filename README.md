@@ -200,6 +200,31 @@ workflow transition, persistent state write, model execution, or process
 launch. The result covers the verification window; it is not a cross-store
 atomic snapshot.
 
+To compose that captured project preview with the existing read-only
+`WAITING_HUMAN` resume Gate, run:
+
+```powershell
+python -m acgps project pending-decision-resolution-to-resume-gate-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --preview path/to/captured-pending-decision-resolution-preview.json `
+  --actor PLANNER `
+  --created-at-utc 2026-08-28T01:04:00Z `
+  --evidence path/to/planner-packet.json `
+  --evidence path/to/planner-result.json
+```
+
+The command verifies the captured project preview, resolves its already-bound
+decision resolution, and passes that exact task, target, actor, and evidence to
+the existing resume Gate. It then verifies the captured preview and resolution
+again before returning the unchanged `WAITING_HUMAN_RESUME_GATE_PREVIEW`
+contract. Authorization remains `NOT_GRANTED`; the command does not resolve the
+decision, write workflow state, perform a transition, or launch a model or
+process. A separately authorized `task advance` remains the only state-changing
+path.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

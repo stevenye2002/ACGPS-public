@@ -1882,6 +1882,77 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_composes_captured_project_resolution_with_resume_gate_without_state_writes(
+        self,
+    ) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        captured = self._run(
+            "project",
+            "pending-decision-resolution-preview",
+            *self._engine_arguments(),
+            "--resolution",
+            str(resolution_path),
+        )
+        capture_path = self.state_root / "pending-decision-resolution-preview.json"
+        capture_path.write_text(
+            json.dumps(captured, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        evidence_root = self.state_root / "project-resume-gate-preview-evidence"
+        evidence_root.mkdir()
+        planner_packet = generate_task_packet(
+            "PLANNER",
+            valid_intake(),
+            valid_policy_result(),
+        )
+        planner_packet_path = evidence_root / "planner-packet.json"
+        planner_packet_path.write_bytes(canonical_json_bytes(planner_packet) + b"\n")
+        planner_result_path = evidence_root / "planner-result.json"
+        planner_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=planner_packet["packet_id"],
+                    role="PLANNER",
+                    summary="Completed the bounded Planner work for SPEC_READY.",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="SPEC_READY",
+                )
+            )
+            + b"\n"
+        )
+        before = self._state_root_identity(self.state_root)
+
+        preview = self._run(
+            "project",
+            "pending-decision-resolution-to-resume-gate-preview",
+            *self._engine_arguments(),
+            "--preview",
+            str(capture_path),
+            "--actor",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-28T01:04:00Z",
+            "--evidence",
+            str(planner_packet_path),
+            "--evidence",
+            str(planner_result_path),
+        )
+
+        self.assertEqual(preview["status"], "WAITING_HUMAN_RESUME_GATE_PREVIEW")
+        self.assertEqual(preview["task_id"], "ftic-governance-1")
+        self.assertEqual(preview["target_state"], resolution["resume_state"])
+        self.assertEqual(preview["required_actor"], "PLANNER")
+        self.assertEqual(preview["decision_id"], resolution["decision_id"])
+        self.assertEqual(preview["authorization_status"], "NOT_GRANTED")
+        self.assertEqual(preview["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(
+            preview["controls"]["workflow_transition"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_previews_waiting_human_resume_gate_without_state_writes(self) -> None:
         resolution, resolution_path = self._waiting_human_resolution()
         evidence_root = self.state_root / "resume-gate-preview-evidence"

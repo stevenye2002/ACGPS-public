@@ -1754,6 +1754,114 @@ class WorkflowEngine:
             "controls": current["controls"],
         }
 
+    def trusted_project_pending_decision_resolution_to_resume_gate_preview(
+        self,
+        preview_path: Path,
+        *,
+        actor: str,
+        evidence_paths: Iterable[Path],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        verification = (
+            self.trusted_project_pending_decision_resolution_preview_verification(
+                preview_path
+            )
+        )
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            preview_path
+        )
+        expected_capture_snapshot = (
+            verification["captured_preview_path"],
+            verification["captured_preview_size_bytes"],
+            verification["captured_preview_sha256"],
+        )
+        if captured_snapshot != expected_capture_snapshot:
+            raise WorkflowEngineError(
+                "captured pending-decision resolution preview identity changed "
+                "during resume gate preview"
+            )
+
+        resolution_path = self._captured_resolution_path(captured)
+        resolution, resolution_snapshot = self._read_strict_evidence_json_snapshot(
+            resolution_path
+        )
+        resolution_identity = verification["resolution_identity"]
+        expected_resolution_snapshot = (
+            resolution_identity["path"],
+            resolution_identity["size_bytes"],
+            resolution_identity["sha256"],
+        )
+        if resolution_snapshot != expected_resolution_snapshot or any(
+            resolution[field] != verification[field]
+            for field in (
+                "decision_id",
+                "project_id",
+                "task_id",
+                "selected_option",
+                "resume_state",
+            )
+        ):
+            raise WorkflowEngineError(
+                "decision resolution identity does not match the verified project preview"
+            )
+
+        gate_preview = self.waiting_human_resume_gate_preview(
+            verification["task_id"],
+            to_state=verification["resume_state"],
+            actor=actor,
+            evidence_paths=evidence_paths,
+            decision_resolution=resolution,
+            created_at_utc=created_at_utc,
+            risk_triggers=risk_triggers,
+            human_triggers=human_triggers,
+            task_attributes=task_attributes,
+        )
+        if (
+            gate_preview["task_id"] != verification["task_id"]
+            or gate_preview["project_id"] != verification["project_id"]
+            or gate_preview["decision_id"] != verification["decision_id"]
+            or gate_preview["target_state"] != verification["resume_state"]
+        ):
+            raise WorkflowEngineError(
+                "resume gate preview does not match the verified project resolution"
+            )
+
+        try:
+            final_verification = (
+                self.trusted_project_pending_decision_resolution_preview_verification(
+                    preview_path
+                )
+            )
+            final_captured, final_captured_snapshot = (
+                self._read_strict_evidence_json_snapshot(preview_path)
+            )
+            final_resolution_path = self._captured_resolution_path(final_captured)
+            final_resolution, final_resolution_snapshot = (
+                self._read_strict_evidence_json_snapshot(final_resolution_path)
+            )
+        except WorkflowEngineError as exc:
+            raise WorkflowEngineError(
+                "captured pending-decision resolution preview identity changed "
+                "during resume gate preview"
+            ) from exc
+        if (
+            canonical_json_bytes(final_verification)
+            != canonical_json_bytes(verification)
+            or canonical_json_bytes(final_captured) != canonical_json_bytes(captured)
+            or final_captured_snapshot != captured_snapshot
+            or final_resolution_path != resolution_path
+            or canonical_json_bytes(final_resolution) != canonical_json_bytes(resolution)
+            or final_resolution_snapshot != resolution_snapshot
+        ):
+            raise WorkflowEngineError(
+                "captured pending-decision resolution preview identity changed "
+                "during resume gate preview"
+            )
+        return gate_preview
+
     def trusted_project_pending_decision_queue_verification(
         self,
         queue_path: Path,
