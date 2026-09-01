@@ -1624,6 +1624,74 @@ class WorkflowEngine:
             "controls": final_summary["controls"],
         }
 
+    def trusted_project_pending_decision_resolution_preview(
+        self,
+        resolution_path: Path,
+    ) -> dict[str, Any]:
+        resolution, resolution_snapshot = self._read_strict_evidence_json_snapshot(
+            resolution_path
+        )
+        canonical_resolution = canonical_json_bytes(resolution) + b"\n"
+        if (
+            resolution_snapshot[1] != len(canonical_resolution)
+            or resolution_snapshot[2]
+            != hashlib.sha256(canonical_resolution).hexdigest()
+        ):
+            raise WorkflowEngineError(
+                "decision resolution must use canonical JSON bytes with one terminal LF"
+            )
+
+        initial_queue = self.trusted_project_pending_decision_queue()
+        try:
+            request = self.decisions.validate_resolution(resolution)
+        except DecisionQueueError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        initial_matches = [
+            record
+            for record in initial_queue["decisions"]
+            if record["decision_id"] == resolution["decision_id"]
+        ]
+        if len(initial_matches) != 1 or initial_matches[0] != request:
+            raise WorkflowEngineError(
+                "decision resolution does not match the trusted project pending-decision queue"
+            )
+
+        final_resolution, final_resolution_snapshot = (
+            self._read_strict_evidence_json_snapshot(resolution_path)
+        )
+        if (
+            canonical_json_bytes(final_resolution) != canonical_json_bytes(resolution)
+            or final_resolution_snapshot != resolution_snapshot
+        ):
+            raise WorkflowEngineError(
+                "decision resolution identity changed during project preview"
+            )
+        final_queue = self.trusted_project_pending_decision_queue()
+        if canonical_json_bytes(final_queue) != canonical_json_bytes(initial_queue):
+            raise WorkflowEngineError(
+                "trusted project pending-decision queue changed during resolution preview"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_PREVIEW",
+            "decision_id": final_resolution["decision_id"],
+            "project_id": final_resolution["project_id"],
+            "task_id": final_resolution["task_id"],
+            "selected_option": final_resolution["selected_option"],
+            "resume_state": final_resolution["resume_state"],
+            "pending_request_status": request["status"],
+            "authorization_status": "NOT_EVALUATED",
+            "resolution_identity": {
+                "path": final_resolution_snapshot[0],
+                "size_bytes": final_resolution_snapshot[1],
+                "sha256": final_resolution_snapshot[2],
+                "status": "UNCHANGED_DURING_QUERY",
+            },
+            "project_queue_identity_status": "UNCHANGED_DURING_QUERY",
+            "control_store_authority": final_queue["control_store_authority"],
+            "controls": final_queue["controls"],
+        }
+
     def trusted_project_pending_decision_queue_verification(
         self,
         queue_path: Path,

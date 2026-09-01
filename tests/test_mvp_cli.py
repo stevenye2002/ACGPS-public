@@ -1797,6 +1797,43 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_previews_project_bound_pending_decision_resolution_without_state_writes(
+        self,
+    ) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        before = self._state_root_identity(self.state_root)
+
+        preview = self._run(
+            "project",
+            "pending-decision-resolution-preview",
+            *self._engine_arguments(),
+            "--resolution",
+            str(resolution_path),
+        )
+
+        self.assertEqual(
+            preview["status"],
+            "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_PREVIEW",
+        )
+        self.assertEqual(preview["decision_id"], resolution["decision_id"])
+        self.assertEqual(preview["project_id"], "FTIC")
+        self.assertEqual(preview["task_id"], "ftic-governance-1")
+        self.assertEqual(preview["selected_option"], "RESUME")
+        self.assertEqual(preview["resume_state"], "SPEC_READY")
+        self.assertEqual(preview["pending_request_status"], "PENDING")
+        self.assertEqual(preview["authorization_status"], "NOT_EVALUATED")
+        self.assertEqual(
+            preview["resolution_identity"]["status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(
+            preview["project_queue_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(preview["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_previews_waiting_human_resume_gate_without_state_writes(self) -> None:
         resolution, resolution_path = self._waiting_human_resolution()
         evidence_root = self.state_root / "resume-gate-preview-evidence"

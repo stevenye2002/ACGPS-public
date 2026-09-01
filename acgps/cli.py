@@ -140,6 +140,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "pending-decision-queue"
     )
     _add_project_arguments(project_pending_decision_queue, include_state=True)
+    project_pending_decision_resolution_preview = project_commands.add_parser(
+        "pending-decision-resolution-preview"
+    )
+    _add_project_arguments(
+        project_pending_decision_resolution_preview,
+        include_state=True,
+    )
+    project_pending_decision_resolution_preview.add_argument(
+        "--resolution",
+        required=True,
+    )
     project_pending_decision_queue_verify = project_commands.add_parser(
         "pending-decision-queue-verify"
     )
@@ -496,6 +507,20 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).trusted_project_pending_decision_queue()
+
+    if (
+        args.group == "project"
+        and args.command == "pending-decision-resolution-preview"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_project_pending_decision_resolution_preview(
+            Path(args.resolution)
+        )
 
     if args.group == "project" and args.command == "pending-decision-queue-verify":
         return WorkflowEngine(

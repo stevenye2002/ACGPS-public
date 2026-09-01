@@ -158,6 +158,28 @@ without resolving a decision, writing workflow state, authorizing a transition,
 or launching a model or process. The result covers the verification window; it
 is not a cross-store atomic snapshot.
 
+To preview a proposed human-decision resolution against that same current
+trusted project queue, keep the canonical JSON resolution beneath the managed
+project or ACGPS state root and run:
+
+```powershell
+python -m acgps project pending-decision-resolution-preview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --resolution path/to/decision-resolution.json
+```
+
+The preview reuses the existing `human_decision_resolution` validator and
+requires its pending request to appear exactly once in the current trusted
+project queue. Before returning, it rechecks both the resolution file identity
+and the complete project queue. The output records the resolution path, size,
+SHA-256, and bounded identity status, but leaves authorization as
+`NOT_EVALUATED`; it does not resolve the decision, advance workflow state, or
+launch a model or process. `task advance` remains the authoritative transition
+gate and revalidates the resolution if execution is later authorized.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

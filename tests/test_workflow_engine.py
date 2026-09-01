@@ -3434,6 +3434,186 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_pending_decision_resolution_preview_binds_current_queue_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=13)
+            resolution = waiting_human_resolution(waiting)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_bytes = canonical_json_bytes(resolution) + b"\n"
+            resolution_path.write_bytes(resolution_bytes)
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            result = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+
+            self.assertEqual(
+                result["status"],
+                "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_PREVIEW",
+            )
+            self.assertEqual(result["decision_id"], resolution["decision_id"])
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_id"], "ftic-governance-1")
+            self.assertEqual(result["selected_option"], "RESUME")
+            self.assertEqual(result["resume_state"], "SPEC_READY")
+            self.assertEqual(result["pending_request_status"], "PENDING")
+            self.assertEqual(result["authorization_status"], "NOT_EVALUATED")
+            self.assertEqual(
+                result["resolution_identity"],
+                {
+                    "path": "state/decision-resolution-preview.json",
+                    "size_bytes": len(resolution_bytes),
+                    "sha256": hashlib.sha256(resolution_bytes).hexdigest(),
+                    "status": "UNCHANGED_DURING_QUERY",
+                },
+            )
+            self.assertEqual(
+                result["project_queue_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_pending_decision_resolution_preview_rejects_noncanonical_resolution(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=14)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_text(
+                json.dumps(waiting_human_resolution(waiting), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "canonical JSON bytes",
+            ):
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+
+    def test_trusted_project_pending_decision_resolution_preview_rejects_resolution_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=15)
+            resolution = waiting_human_resolution(waiting)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(canonical_json_bytes(resolution) + b"\n")
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            read_snapshot = reader._read_strict_evidence_json_snapshot
+            read_count = 0
+
+            def mutate_after_first_read(path: Path):
+                nonlocal read_count
+                result = read_snapshot(path)
+                read_count += 1
+                if read_count == 1:
+                    changed = dict(
+                        resolution,
+                        rationale="A changed human decision rationale.",
+                    )
+                    resolution_path.write_bytes(canonical_json_bytes(changed) + b"\n")
+                return result
+
+            with patch.object(
+                reader,
+                "_read_strict_evidence_json_snapshot",
+                side_effect=mutate_after_first_read,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "resolution identity changed",
+            ):
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+
+    def test_trusted_project_pending_decision_resolution_preview_rejects_project_queue_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=16)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            trusted_queue = reader.trusted_project_pending_decision_queue
+            query_count = 0
+
+            def mutate_after_first_query():
+                nonlocal query_count
+                result = trusted_queue()
+                query_count += 1
+                if query_count == 1:
+                    writer.intake(
+                        dict(
+                            valid_intake(),
+                            task_id="ftic-governance-2",
+                            title="Second bounded FTIC governance task",
+                            created_at_utc="2026-08-27T16:10:00Z",
+                        )
+                    )
+                return result
+
+            with patch.object(
+                reader,
+                "trusted_project_pending_decision_queue",
+                side_effect=mutate_after_first_query,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "pending-decision queue changed",
+            ):
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+
     def test_trusted_project_pending_decision_queue_rejects_request_identity_drift(
         self,
     ) -> None:
