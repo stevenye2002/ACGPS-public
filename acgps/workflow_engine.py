@@ -1624,6 +1624,53 @@ class WorkflowEngine:
             "controls": final_summary["controls"],
         }
 
+    def trusted_project_pending_decision_queue_verification(
+        self,
+        queue_path: Path,
+    ) -> dict[str, Any]:
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            queue_path
+        )
+        current = self.trusted_project_pending_decision_queue()
+        captured_canonical = canonical_json_bytes(captured)
+        current_canonical = canonical_json_bytes(current)
+        if captured_canonical != current_canonical:
+            raise WorkflowEngineError(
+                "captured project pending-decision queue does not match current trusted project state"
+            )
+
+        final_captured, final_captured_snapshot = (
+            self._read_strict_evidence_json_snapshot(queue_path)
+        )
+        if (
+            canonical_json_bytes(final_captured) != captured_canonical
+            or final_captured_snapshot != captured_snapshot
+        ):
+            raise WorkflowEngineError(
+                "captured project pending-decision queue identity changed during verification"
+            )
+        final_current = self.trusted_project_pending_decision_queue()
+        if canonical_json_bytes(final_current) != current_canonical:
+            raise WorkflowEngineError(
+                "trusted project pending-decision queue changed during verification"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_PENDING_DECISION_QUEUE_VERIFIED",
+            "queue_status": current["queue_status"],
+            "project_id": current["project_id"],
+            "task_count": current["task_count"],
+            "state_counts": current["state_counts"],
+            "pending_decision_count": current["pending_decision_count"],
+            "captured_queue_path": captured_snapshot[0],
+            "captured_queue_size_bytes": captured_snapshot[1],
+            "captured_queue_sha256": captured_snapshot[2],
+            "captured_queue_identity_status": "UNCHANGED_DURING_QUERY",
+            "current_queue_identity_status": "UNCHANGED_DURING_QUERY",
+            "control_store_authority": current["control_store_authority"],
+            "controls": current["controls"],
+        }
+
     def trusted_project_next_action_queue_verification(
         self,
         queue_path: Path,

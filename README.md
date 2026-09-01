@@ -137,6 +137,27 @@ atomic snapshot. The command writes only JSON to stdout and does not resolve a
 decision, authorize a transition, write workflow state, or launch a model or
 process.
 
+To verify a previously captured UTF-8 pending-decision queue against the
+current trusted project state, keep the capture beneath the managed project or
+ACGPS state root and run:
+
+```powershell
+python -m acgps project pending-decision-queue-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --queue path/to/project-pending-decision-queue.json
+```
+
+The verifier rejects ambiguous JSON keys and type-confused values, requires an
+exact semantic match with the current trusted pending-decision queue, and
+rechecks both the captured bytes and current queue before returning their
+bounded identity status. It reports the capture's path, size, and SHA-256
+without resolving a decision, writing workflow state, authorizing a transition,
+or launching a model or process. The result covers the verification window; it
+is not a cross-store atomic snapshot.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

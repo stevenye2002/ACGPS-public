@@ -1434,6 +1434,79 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_captured_project_pending_decision_queue_without_state_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        writer = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        writer.intake(valid_intake())
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            writer.advance(
+                "ftic-governance-1",
+                target,
+                actor="CONTROLLER",
+                evidence_paths=[evidence],
+                created_at_utc=f"2026-08-27T15:0{index}:00Z",
+            )
+        writer.advance(
+            "ftic-governance-1",
+            "SPEC_READY",
+            actor="CONTROLLER",
+            evidence_paths=[evidence],
+            human_triggers=["H1_PRODUCT_INTENT"],
+            created_at_utc="2026-08-27T15:03:00Z",
+        )
+        reader = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+            read_only=True,
+        )
+        captured = reader.trusted_project_pending_decision_queue()
+        capture_path = self.state_root / "project-pending-decision-queue.json"
+        capture_bytes = (json.dumps(captured, sort_keys=True) + "\n").encode("utf-8")
+        capture_path.write_bytes(capture_bytes)
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project",
+            "pending-decision-queue-verify",
+            *self._engine_arguments(),
+            "--queue",
+            str(capture_path),
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_PROJECT_PENDING_DECISION_QUEUE_VERIFIED",
+        )
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["queue_status"], "PENDING")
+        self.assertEqual(result["pending_decision_count"], 1)
+        self.assertEqual(
+            result["captured_queue_sha256"],
+            hashlib.sha256(capture_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            result["captured_queue_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(
+            result["current_queue_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_verifies_captured_project_next_action_queue_without_state_writes(
         self,
     ) -> None:
