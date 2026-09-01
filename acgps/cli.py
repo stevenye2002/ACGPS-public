@@ -136,6 +136,10 @@ def _build_parser() -> argparse.ArgumentParser:
     project_progress_summary_verify.add_argument("--summary", required=True)
     project_next_action_queue = project_commands.add_parser("next-action-queue")
     _add_project_arguments(project_next_action_queue, include_state=True)
+    project_pending_decision_queue = project_commands.add_parser(
+        "pending-decision-queue"
+    )
+    _add_project_arguments(project_pending_decision_queue, include_state=True)
     project_next_action_queue_verify = project_commands.add_parser(
         "next-action-queue-verify"
     )
@@ -478,6 +482,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).trusted_project_next_action_queue()
+
+    if args.group == "project" and args.command == "pending-decision-queue":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_project_pending_decision_queue()
 
     if args.group == "project" and args.command == "next-action-queue-verify":
         return WorkflowEngine(

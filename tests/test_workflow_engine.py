@@ -3388,6 +3388,87 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_pending_decision_queue_projects_full_requests_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=12)
+            writer.intake(
+                dict(
+                    valid_intake(),
+                    task_id="ftic-governance-2",
+                    title="Second bounded FTIC governance task",
+                    created_at_utc="2026-08-27T12:10:00Z",
+                )
+            )
+            pending_path = writer.decisions.pending_path(waiting["pending_decision_id"])
+            expected_request = json.loads(pending_path.read_text(encoding="utf-8"))
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            result = reader.trusted_project_pending_decision_queue()
+
+            self.assertEqual(result["status"], "TRUSTED_PROJECT_PENDING_DECISION_QUEUE")
+            self.assertEqual(result["queue_status"], "PENDING")
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_count"], 2)
+            self.assertEqual(result["state_counts"], {"DRAFT": 1, "WAITING_HUMAN": 1})
+            self.assertEqual(result["pending_decision_count"], 1)
+            self.assertEqual(result["decisions"], [expected_request])
+            self.assertEqual(result["task_set_identity_status"], "UNCHANGED_DURING_QUERY")
+            self.assertEqual(
+                result["pending_decision_set_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_pending_decision_queue_rejects_request_identity_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            advance_to_waiting_human(writer, hour=13)
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            summary = reader.trusted_project_progress_summary()
+            initial_records = reader.decisions.list_pending()
+            changed_records = json.loads(json.dumps(initial_records))
+            changed_records[0]["question"] = "A changed human decision question"
+
+            with patch.object(
+                reader,
+                "trusted_project_progress_summary",
+                return_value=summary,
+            ), patch.object(
+                reader.decisions,
+                "list_pending",
+                side_effect=[initial_records, changed_records],
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "pending decision set identity changed",
+            ):
+                reader.trusted_project_pending_decision_queue()
+
     def test_trusted_project_next_action_queue_verification_matches_captured_queue_without_writes(
         self,
     ) -> None:

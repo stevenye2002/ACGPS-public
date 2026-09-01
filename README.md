@@ -115,6 +115,28 @@ path, size, and SHA-256 without writing workflow state, authorizing a
 transition, or launching a model or process. The result covers the verification
 window; it is not a global filesystem snapshot.
 
+## Trusted project pending-decision queue
+
+To inspect the complete pending human-decision requests for only the selected
+project profile, run:
+
+```powershell
+python -m acgps project pending-decision-queue `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID
+```
+
+The command returns the existing validated `human_decision_request` records in
+stable task-ID order. It requires an exact one-to-one match between those
+records and the project's trusted `WAITING_HUMAN` task states, then rechecks the
+project task set and complete decision records before returning. Any mismatch
+or drift fails closed. The bounded revalidation window is not a cross-store
+atomic snapshot. The command writes only JSON to stdout and does not resolve a
+decision, authorize a transition, write workflow state, or launch a model or
+process.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

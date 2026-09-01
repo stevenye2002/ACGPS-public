@@ -1559,6 +1559,71 @@ class WorkflowEngine:
             "controls": summary["controls"],
         }
 
+    def _project_pending_decision_records(
+        self,
+        summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        project_id = summary["project_id"]
+        try:
+            pending_records = self.decisions.list_pending()
+        except DecisionQueueError as exc:
+            raise WorkflowEngineError(str(exc)) from exc
+        project_records = sorted(
+            (
+                record
+                for record in pending_records
+                if record["project_id"] == project_id
+            ),
+            key=lambda record: (record["task_id"], record["decision_id"]),
+        )
+        expected_by_task = {
+            task["task_id"]: task["next_action_preview"]["pending_decision_requirement"][
+                "decision_id"
+            ]
+            for task in summary["tasks"]
+            if task["current_state"] == "WAITING_HUMAN"
+        }
+        actual_by_task = {
+            record["task_id"]: record["decision_id"] for record in project_records
+        }
+        if (
+            len(actual_by_task) != len(project_records)
+            or actual_by_task != expected_by_task
+        ):
+            raise WorkflowEngineError(
+                "project pending decision records do not match trusted WAITING_HUMAN tasks"
+            )
+        return project_records
+
+    def trusted_project_pending_decision_queue(self) -> dict[str, Any]:
+        initial_summary = self.trusted_project_progress_summary()
+        initial_records = self._project_pending_decision_records(initial_summary)
+
+        final_summary = self.trusted_project_progress_summary()
+        if final_summary != initial_summary:
+            raise WorkflowEngineError(
+                "project task set identity changed during pending decision queue"
+            )
+        final_records = self._project_pending_decision_records(final_summary)
+        if final_records != initial_records:
+            raise WorkflowEngineError(
+                "pending decision set identity changed during project queue"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_PENDING_DECISION_QUEUE",
+            "queue_status": "PENDING" if final_records else "CLEAR",
+            "project_id": final_summary["project_id"],
+            "task_count": final_summary["task_count"],
+            "state_counts": final_summary["state_counts"],
+            "pending_decision_count": len(final_records),
+            "decisions": final_records,
+            "control_store_authority": final_summary["control_store_authority"],
+            "task_set_identity_status": final_summary["task_set_identity_status"],
+            "pending_decision_set_identity_status": "UNCHANGED_DURING_QUERY",
+            "controls": final_summary["controls"],
+        }
+
     def trusted_project_next_action_queue_verification(
         self,
         queue_path: Path,

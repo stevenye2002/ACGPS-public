@@ -909,7 +909,10 @@ class MVPCLITests(unittest.TestCase):
             str(self.FIXTURE_ROOT / "task-intake.yaml"),
         )
         evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
-        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+        for index, target in enumerate(
+            ("READY_FOR_CLASSIFICATION", "CLASSIFIED"),
+            start=1,
+        ):
             self._run(
                 "task",
                 "advance",
@@ -1373,6 +1376,60 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(result["controls"]["model_execution"], "NOT_STARTED")
         self.assertEqual(result["controls"]["process_launch"], "NOT_STARTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+    def test_cli_reports_trusted_project_pending_decision_queue_without_state_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        engine = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        engine.intake(valid_intake())
+        evidence = self.FIXTURE_ROOT / "docs" / "FTIC_PROJECT_REPLAN.md"
+        for index, target in enumerate(("READY_FOR_CLASSIFICATION", "CLASSIFIED"), start=1):
+            engine.advance(
+                "ftic-governance-1",
+                target,
+                actor="CONTROLLER",
+                evidence_paths=[evidence],
+                created_at_utc=f"2026-08-27T14:0{index}:00Z",
+            )
+        waiting = engine.advance(
+            "ftic-governance-1",
+            "SPEC_READY",
+            actor="CONTROLLER",
+            evidence_paths=[evidence],
+            human_triggers=["H1_PRODUCT_INTENT"],
+            created_at_utc="2026-08-27T14:03:00Z",
+        )
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project",
+            "pending-decision-queue",
+            *self._engine_arguments(),
+        )
+
+        self.assertEqual(result["status"], "TRUSTED_PROJECT_PENDING_DECISION_QUEUE")
+        self.assertEqual(result["queue_status"], "PENDING")
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["pending_decision_count"], 1)
+        self.assertEqual(
+            result["decisions"][0]["decision_id"],
+            waiting["pending_decision_id"],
+        )
+        self.assertEqual(
+            result["decisions"][0]["question"],
+            "Authorize transition to SPEC_READY?",
+        )
+        self.assertEqual(result["decisions"][0]["recommended_option"], "RESUME")
         self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
