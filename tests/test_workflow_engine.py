@@ -3043,6 +3043,175 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_assurance_overview_composes_existing_components_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            first_intake = valid_intake()
+            second_intake = dict(
+                first_intake,
+                task_id="ftic-governance-2",
+                title="Second bounded FTIC governance task",
+                created_at_utc="2026-08-23T00:10:00Z",
+            )
+            writer.intake(first_intake)
+            writer.intake(second_intake)
+            before = tree_bytes(state_root)
+
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            result = reader.trusted_project_assurance_overview()
+
+            self.assertEqual(result["status"], "TRUSTED_PROJECT_ASSURANCE_OVERVIEW")
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_count"], 2)
+            self.assertEqual(result["state_counts"], {"DRAFT": 2})
+            self.assertEqual(
+                [task["task_id"] for task in result["progress_summary"]["tasks"]],
+                ["ftic-governance-1", "ftic-governance-2"],
+            )
+            self.assertEqual(
+                result["audit_lineage_summary"]["tasks"],
+                [
+                    task["audit_verification"]
+                    for task in result["progress_summary"]["tasks"]
+                ],
+            )
+            self.assertEqual(
+                result["next_action_queue"]["queue"],
+                [
+                    task["next_action_preview"]
+                    for task in result["progress_summary"]["tasks"]
+                ],
+            )
+            self.assertEqual(result["pending_decision_queue"]["queue_status"], "CLEAR")
+            self.assertEqual(result["component_identity_status"], "CONSISTENT")
+            self.assertEqual(
+                result["overview_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_assurance_overview_rejects_component_identity_mismatch(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            audit_summary = reader.trusted_project_audit_lineage_summary()
+            mismatched_audit = dict(audit_summary, project_id="OTHER")
+
+            with patch.object(
+                reader,
+                "trusted_project_audit_lineage_summary",
+                return_value=mismatched_audit,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "assurance overview components do not share one project identity",
+            ):
+                reader.trusted_project_assurance_overview()
+
+    def test_trusted_project_assurance_overview_rejects_final_component_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first_state_root = Path(tmp) / "first-state"
+            first_writer = WorkflowEngine(
+                ROOT,
+                first_state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+            )
+            first_writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT,
+                first_state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            initial_components = (
+                reader.trusted_project_progress_summary(),
+                reader.trusted_project_audit_lineage_summary(),
+                reader.trusted_project_next_action_queue(),
+                reader.trusted_project_pending_decision_queue(),
+            )
+
+            second_state_root = Path(tmp) / "second-state"
+            second_writer = WorkflowEngine(
+                ROOT,
+                second_state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+            )
+            second_writer.intake(valid_intake())
+            second_writer.intake(
+                dict(
+                    valid_intake(),
+                    task_id="ftic-governance-2",
+                    title="Second bounded FTIC governance task",
+                    created_at_utc="2026-08-23T00:10:00Z",
+                )
+            )
+            second_reader = WorkflowEngine(
+                ROOT,
+                second_state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            final_components = (
+                second_reader.trusted_project_progress_summary(),
+                second_reader.trusted_project_audit_lineage_summary(),
+                second_reader.trusted_project_next_action_queue(),
+                second_reader.trusted_project_pending_decision_queue(),
+            )
+
+            with patch.object(
+                reader,
+                "trusted_project_progress_summary",
+                side_effect=[initial_components[0], final_components[0]],
+            ), patch.object(
+                reader,
+                "trusted_project_audit_lineage_summary",
+                side_effect=[initial_components[1], final_components[1]],
+            ), patch.object(
+                reader,
+                "trusted_project_next_action_queue",
+                side_effect=[initial_components[2], final_components[2]],
+            ), patch.object(
+                reader,
+                "trusted_project_pending_decision_queue",
+                side_effect=[initial_components[3], final_components[3]],
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted project assurance overview changed during query",
+            ):
+                reader.trusted_project_assurance_overview()
+
     def test_trusted_project_progress_summary_reports_empty_project(self) -> None:
         from acgps.workflow_engine import WorkflowEngine
 

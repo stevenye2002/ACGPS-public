@@ -1498,6 +1498,150 @@ class WorkflowEngine:
             },
         }
 
+    def _trusted_project_assurance_components(self) -> dict[str, Any]:
+        progress_summary = self.trusted_project_progress_summary()
+        audit_lineage_summary = self.trusted_project_audit_lineage_summary()
+        next_action_queue = self.trusted_project_next_action_queue()
+        pending_decision_queue = self.trusted_project_pending_decision_queue()
+        components = (
+            progress_summary,
+            audit_lineage_summary,
+            next_action_queue,
+            pending_decision_queue,
+        )
+
+        expected_statuses = (
+            "TRUSTED_PROJECT_PROGRESS_SUMMARY",
+            "TRUSTED_PROJECT_AUDIT_LINEAGE_SUMMARY",
+            "TRUSTED_PROJECT_NEXT_ACTION_QUEUE",
+            "TRUSTED_PROJECT_PENDING_DECISION_QUEUE",
+        )
+        if any(
+            component["status"] != expected_status
+            for component, expected_status in zip(components, expected_statuses)
+        ):
+            raise WorkflowEngineError(
+                "assurance overview received an unexpected component result"
+            )
+
+        project_identity = canonical_json_bytes(progress_summary["project_id"])
+        if any(
+            canonical_json_bytes(component["project_id"]) != project_identity
+            for component in components[1:]
+        ):
+            raise WorkflowEngineError(
+                "assurance overview components do not share one project identity"
+            )
+
+        task_count_identity = canonical_json_bytes(progress_summary["task_count"])
+        if any(
+            canonical_json_bytes(component["task_count"]) != task_count_identity
+            for component in components[1:]
+        ):
+            raise WorkflowEngineError(
+                "assurance overview components do not share one task-set identity"
+            )
+
+        state_counts_identity = canonical_json_bytes(progress_summary["state_counts"])
+        if any(
+            canonical_json_bytes(component["state_counts"])
+            != state_counts_identity
+            for component in (next_action_queue, pending_decision_queue)
+        ):
+            raise WorkflowEngineError(
+                "assurance overview components do not share one state-count identity"
+            )
+
+        authority_identity = canonical_json_bytes(
+            progress_summary["control_store_authority"]
+        )
+        if any(
+            canonical_json_bytes(component["control_store_authority"])
+            != authority_identity
+            for component in components[1:]
+        ):
+            raise WorkflowEngineError(
+                "assurance overview components do not share one control-store authority"
+            )
+
+        controls_identity = canonical_json_bytes(progress_summary["controls"])
+        if any(
+            canonical_json_bytes(component["controls"]) != controls_identity
+            for component in components[1:]
+        ):
+            raise WorkflowEngineError(
+                "assurance overview components do not share one control identity"
+            )
+
+        expected_audit_tasks = [
+            task["audit_verification"] for task in progress_summary["tasks"]
+        ]
+        if canonical_json_bytes(audit_lineage_summary["tasks"]) != canonical_json_bytes(
+            expected_audit_tasks
+        ):
+            raise WorkflowEngineError(
+                "assurance overview audit lineage does not match project progress"
+            )
+
+        expected_next_actions = [
+            task["next_action_preview"] for task in progress_summary["tasks"]
+        ]
+        if canonical_json_bytes(next_action_queue["queue"]) != canonical_json_bytes(
+            expected_next_actions
+        ):
+            raise WorkflowEngineError(
+                "assurance overview next-action queue does not match project progress"
+            )
+
+        expected_pending_by_task = {
+            task["task_id"]: task["next_action_preview"][
+                "pending_decision_requirement"
+            ]["decision_id"]
+            for task in progress_summary["tasks"]
+            if task["current_state"] == "WAITING_HUMAN"
+        }
+        actual_pending_by_task = {
+            record["task_id"]: record["decision_id"]
+            for record in pending_decision_queue["decisions"]
+        }
+        if (
+            len(actual_pending_by_task) != len(pending_decision_queue["decisions"])
+            or canonical_json_bytes(actual_pending_by_task)
+            != canonical_json_bytes(expected_pending_by_task)
+        ):
+            raise WorkflowEngineError(
+                "assurance overview pending decisions do not match project progress"
+            )
+
+        return {
+            "project_id": progress_summary["project_id"],
+            "task_count": progress_summary["task_count"],
+            "state_counts": progress_summary["state_counts"],
+            "progress_summary": progress_summary,
+            "audit_lineage_summary": audit_lineage_summary,
+            "next_action_queue": next_action_queue,
+            "pending_decision_queue": pending_decision_queue,
+            "control_store_authority": progress_summary["control_store_authority"],
+            "controls": progress_summary["controls"],
+        }
+
+    def trusted_project_assurance_overview(self) -> dict[str, Any]:
+        initial_components = self._trusted_project_assurance_components()
+        final_components = self._trusted_project_assurance_components()
+        if canonical_json_bytes(final_components) != canonical_json_bytes(
+            initial_components
+        ):
+            raise WorkflowEngineError(
+                "trusted project assurance overview changed during query"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_ASSURANCE_OVERVIEW",
+            **final_components,
+            "component_identity_status": "CONSISTENT",
+            "overview_identity_status": "UNCHANGED_DURING_QUERY",
+        }
+
     def trusted_project_audit_lineage_summary(self) -> dict[str, Any]:
         summary = self.trusted_project_progress_summary()
         return {

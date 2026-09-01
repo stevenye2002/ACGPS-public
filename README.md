@@ -77,6 +77,30 @@ bounded identity status. It reports the capture's path, size, and SHA-256 while
 remaining read-only. The result covers the verification window; it is not a
 global filesystem snapshot.
 
+## Trusted project assurance overview
+
+An operator can obtain one read-only assurance view that composes the current
+trusted project progress, audit-lineage, next-action, and pending-decision
+results:
+
+```powershell
+python -m acgps project assurance-overview `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID
+```
+
+The command requires the four existing component results to share the same
+project, task-set, state-count, control-store, and control identities. It also
+checks that their audit, next-action, and pending-decision projections match the
+trusted progress summary. The complete component set is then recomputed and
+compared using type-preserving canonical JSON before the overview is returned.
+Any mismatch or drift fails closed. This bounded final revalidation is not a
+transaction-level or global filesystem snapshot. The command writes JSON only
+to stdout and does not write workflow state, authorize a transition, launch a
+model or process, or invoke an execution adapter.
+
 ## Trusted project audit-lineage summary
 
 An operator can project the existing audit-lineage verification for every task
