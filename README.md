@@ -97,6 +97,26 @@ does not reinterpret audit evidence, write workflow state, authorize a
 transition, or launch a model or process. Its bounded revalidation window is
 not a transaction-level snapshot of every project audit lineage at one instant.
 
+To verify a previously captured UTF-8 audit-lineage summary against the current
+trusted project state, keep the capture beneath the managed project or ACGPS
+state root and run:
+
+```powershell
+python -m acgps project audit-lineage-summary-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --summary path/to/project-audit-lineage-summary.json
+```
+
+The verifier rejects ambiguous JSON keys and type-confused values, requires an
+exact semantic match with the current trusted audit-lineage summary, and
+rechecks both the captured identity and current project summary before
+returning. It reports the capture path, size, and SHA-256 without writing state,
+authorizing a transition, or launching a model or process. The result covers
+the bounded verification window; it is not a global transaction snapshot.
+
 ## Trusted project next-action queue
 
 An operator can project every task's existing trusted next-action preview into

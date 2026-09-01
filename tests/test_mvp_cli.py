@@ -1325,6 +1325,61 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_captured_project_audit_lineage_summary_without_state_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        writer = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+        )
+        writer.intake(valid_intake())
+        reader = WorkflowEngine(
+            self.ROOT,
+            self.state_root,
+            self.FIXTURE_ROOT,
+            "ftic-v1",
+            read_only=True,
+        )
+        captured = reader.trusted_project_audit_lineage_summary()
+        capture_path = self.state_root / "project-audit-lineage-summary.json"
+        capture_bytes = (json.dumps(captured, sort_keys=True) + "\n").encode("utf-8")
+        capture_path.write_bytes(capture_bytes)
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project",
+            "audit-lineage-summary-verify",
+            *self._engine_arguments(),
+            "--summary",
+            str(capture_path),
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_PROJECT_AUDIT_LINEAGE_SUMMARY_VERIFIED",
+        )
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["task_count"], 1)
+        self.assertEqual(
+            result["captured_summary_sha256"],
+            hashlib.sha256(capture_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            result["captured_summary_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(
+            result["current_summary_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_verifies_captured_project_progress_summary_without_state_writes(
         self,
     ) -> None:

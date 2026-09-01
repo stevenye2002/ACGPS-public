@@ -133,6 +133,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "audit-lineage-summary"
     )
     _add_project_arguments(project_audit_lineage_summary, include_state=True)
+    project_audit_lineage_summary_verify = project_commands.add_parser(
+        "audit-lineage-summary-verify"
+    )
+    _add_project_arguments(project_audit_lineage_summary_verify, include_state=True)
+    project_audit_lineage_summary_verify.add_argument("--summary", required=True)
     project_progress_summary_verify = project_commands.add_parser(
         "progress-summary-verify"
     )
@@ -590,6 +595,15 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).trusted_project_audit_lineage_summary()
+
+    if args.group == "project" and args.command == "audit-lineage-summary-verify":
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_project_audit_lineage_summary_verification(Path(args.summary))
 
     if args.group == "project" and args.command == "progress-summary-verify":
         return WorkflowEngine(
