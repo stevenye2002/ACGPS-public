@@ -225,6 +225,31 @@ decision, write workflow state, perform a transition, or launch a model or
 process. A separately authorized `task advance` remains the only state-changing
 path.
 
+To verify a captured resume Gate preview against current trusted project state,
+replay the exact inputs used to create it:
+
+```powershell
+python -m acgps project pending-decision-resolution-to-resume-gate-preview-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --gate-preview path/to/captured-project-resolution-resume-gate-preview.json `
+  --preview path/to/captured-pending-decision-resolution-preview.json `
+  --actor PLANNER `
+  --created-at-utc 2026-08-28T01:04:00Z `
+  --evidence path/to/planner-packet.json `
+  --evidence path/to/planner-result.json
+```
+
+The Gate preview does not embed every policy input, so verification requires
+the original actor, timestamp, evidence, risk triggers, human triggers, and
+task attributes. The command uses a type-preserving canonical JSON comparison,
+then rechecks the captured file and recomputes the current Gate before returning.
+It performs no decision resolution, workflow transition, persistent state write,
+model execution, or process launch. The result covers a bounded verification
+window; it is not a cross-store atomic snapshot.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

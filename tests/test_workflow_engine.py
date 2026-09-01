@@ -4032,6 +4032,327 @@ class WorkflowEngineTests(unittest.TestCase):
                     created_at_utc="2026-08-28T00:04:00Z",
                 )
 
+    def test_trusted_project_pending_decision_resolution_to_resume_gate_preview_verification_matches_capture_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=1)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            resolution_preview = (
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+            )
+            resolution_preview_path = (
+                state_root / "pending-decision-resolution-preview.json"
+            )
+            resolution_preview_path.write_text(
+                json.dumps(resolution_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            planner_evidence = write_planner_transition_evidence(
+                writer,
+                target="SPEC_READY",
+            )
+            gate_preview = (
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview(
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T01:04:00Z",
+                )
+            )
+            gate_preview_path = (
+                state_root / "captures" / "project-resolution-resume-gate-preview.json"
+            )
+            gate_preview_path.parent.mkdir(parents=True)
+            gate_preview_bytes = (
+                json.dumps(gate_preview, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            gate_preview_path.write_bytes(gate_preview_bytes)
+            before = tree_bytes(state_root)
+
+            result = reader.trusted_project_pending_decision_resolution_to_resume_gate_preview_verification(
+                gate_preview_path,
+                resolution_preview_path,
+                actor="PLANNER",
+                evidence_paths=planner_evidence,
+                created_at_utc="2026-08-28T01:04:00Z",
+            )
+
+            self.assertEqual(
+                result["status"],
+                "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_TO_RESUME_GATE_PREVIEW_VERIFIED",
+            )
+            self.assertEqual(result["project_id"], "FTIC")
+            self.assertEqual(result["task_id"], "ftic-governance-1")
+            self.assertEqual(result["decision_id"], resolution_preview["decision_id"])
+            self.assertEqual(result["target_state"], "SPEC_READY")
+            self.assertEqual(result["required_actor"], "PLANNER")
+            self.assertEqual(
+                result["captured_gate_preview_path"],
+                "state/captures/project-resolution-resume-gate-preview.json",
+            )
+            self.assertEqual(
+                result["captured_gate_preview_size_bytes"],
+                len(gate_preview_bytes),
+            )
+            self.assertEqual(
+                result["captured_gate_preview_sha256"],
+                hashlib.sha256(gate_preview_bytes).hexdigest(),
+            )
+            self.assertEqual(
+                result["captured_gate_preview_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(
+                result["current_gate_preview_identity_status"],
+                "UNCHANGED_DURING_QUERY",
+            )
+            self.assertEqual(result["authorization_status"], "NOT_GRANTED")
+            self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+            self.assertEqual(
+                result["controls"]["workflow_transition"],
+                "NOT_PERFORMED",
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_pending_decision_resolution_to_resume_gate_preview_verification_preserves_json_types(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=2)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            resolution_preview = (
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+            )
+            resolution_preview_path = (
+                state_root / "pending-decision-resolution-preview.json"
+            )
+            resolution_preview_path.write_text(
+                json.dumps(resolution_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            planner_evidence = write_planner_transition_evidence(
+                writer,
+                target="SPEC_READY",
+            )
+            gate_preview = (
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview(
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T02:04:00Z",
+                )
+            )
+            gate_preview["audit_generation"] = True
+            gate_preview_path = state_root / "project-resolution-resume-gate-preview.json"
+            gate_preview_path.write_text(
+                json.dumps(gate_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured project resolution-to-resume gate preview does not match",
+            ):
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview_verification(
+                    gate_preview_path,
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T02:04:00Z",
+                )
+
+    def test_trusted_project_pending_decision_resolution_to_resume_gate_preview_verification_rejects_capture_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=3)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            resolution_preview = (
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+            )
+            resolution_preview_path = (
+                state_root / "pending-decision-resolution-preview.json"
+            )
+            resolution_preview_path.write_text(
+                json.dumps(resolution_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            planner_evidence = write_planner_transition_evidence(
+                writer,
+                target="SPEC_READY",
+            )
+            gate_preview = (
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview(
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T03:04:00Z",
+                )
+            )
+            gate_preview_path = state_root / "project-resolution-resume-gate-preview.json"
+            gate_preview_path.write_text(
+                json.dumps(gate_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            strict_read = reader._read_strict_evidence_json_snapshot
+            gate_capture_reads = 0
+
+            def mutate_after_first_capture_read(path: Path):
+                nonlocal gate_capture_reads
+                result = strict_read(path)
+                if path == gate_preview_path:
+                    gate_capture_reads += 1
+                    if gate_capture_reads == 1:
+                        changed = dict(gate_preview, authorization_status="TAMPERED")
+                        gate_preview_path.write_text(
+                            json.dumps(changed, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                return result
+
+            with patch.object(
+                reader,
+                "_read_strict_evidence_json_snapshot",
+                side_effect=mutate_after_first_capture_read,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured project resolution-to-resume gate preview identity changed",
+            ):
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview_verification(
+                    gate_preview_path,
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T03:04:00Z",
+                )
+
+    def test_trusted_project_pending_decision_resolution_to_resume_gate_preview_verification_rejects_current_preview_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=4)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            resolution_preview = (
+                reader.trusted_project_pending_decision_resolution_preview(
+                    resolution_path
+                )
+            )
+            resolution_preview_path = (
+                state_root / "pending-decision-resolution-preview.json"
+            )
+            resolution_preview_path.write_text(
+                json.dumps(resolution_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            planner_evidence = write_planner_transition_evidence(
+                writer,
+                target="SPEC_READY",
+            )
+            gate_preview = (
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview(
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T04:04:00Z",
+                )
+            )
+            gate_preview_path = state_root / "project-resolution-resume-gate-preview.json"
+            gate_preview_path.write_text(
+                json.dumps(gate_preview, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            current_preview = (
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview
+            )
+            query_count = 0
+
+            def mutate_second_current_preview(*args, **kwargs):
+                nonlocal query_count
+                result = current_preview(*args, **kwargs)
+                query_count += 1
+                if query_count == 2:
+                    return dict(result, authorization_status="TAMPERED")
+                return result
+
+            with patch.object(
+                reader,
+                "trusted_project_pending_decision_resolution_to_resume_gate_preview",
+                side_effect=mutate_second_current_preview,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted project resolution-to-resume gate preview changed during verification",
+            ):
+                reader.trusted_project_pending_decision_resolution_to_resume_gate_preview_verification(
+                    gate_preview_path,
+                    resolution_preview_path,
+                    actor="PLANNER",
+                    evidence_paths=planner_evidence,
+                    created_at_utc="2026-08-28T04:04:00Z",
+                )
+
     def test_trusted_project_pending_decision_queue_rejects_request_identity_drift(
         self,
     ) -> None:

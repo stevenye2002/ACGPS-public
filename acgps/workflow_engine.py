@@ -1862,6 +1862,88 @@ class WorkflowEngine:
             )
         return gate_preview
 
+    def trusted_project_pending_decision_resolution_to_resume_gate_preview_verification(
+        self,
+        gate_preview_path: Path,
+        preview_path: Path,
+        *,
+        actor: str,
+        evidence_paths: Iterable[Path],
+        created_at_utc: str,
+        risk_triggers: Iterable[str] = (),
+        human_triggers: Iterable[str] = (),
+        task_attributes: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        evidence_items = tuple(Path(path) for path in evidence_paths)
+        risk_trigger_items = tuple(risk_triggers)
+        human_trigger_items = tuple(human_triggers)
+        attribute_items = dict(task_attributes or {})
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            gate_preview_path
+        )
+        current = (
+            self.trusted_project_pending_decision_resolution_to_resume_gate_preview(
+                preview_path,
+                actor=actor,
+                evidence_paths=evidence_items,
+                created_at_utc=created_at_utc,
+                risk_triggers=risk_trigger_items,
+                human_triggers=human_trigger_items,
+                task_attributes=attribute_items,
+            )
+        )
+        captured_canonical = canonical_json_bytes(captured)
+        current_canonical = canonical_json_bytes(current)
+        if captured_canonical != current_canonical:
+            raise WorkflowEngineError(
+                "captured project resolution-to-resume gate preview does not match "
+                "current trusted project state"
+            )
+
+        final_captured, final_captured_snapshot = (
+            self._read_strict_evidence_json_snapshot(gate_preview_path)
+        )
+        if (
+            canonical_json_bytes(final_captured) != captured_canonical
+            or final_captured_snapshot != captured_snapshot
+        ):
+            raise WorkflowEngineError(
+                "captured project resolution-to-resume gate preview identity changed "
+                "during verification"
+            )
+        final_current = (
+            self.trusted_project_pending_decision_resolution_to_resume_gate_preview(
+                preview_path,
+                actor=actor,
+                evidence_paths=evidence_items,
+                created_at_utc=created_at_utc,
+                risk_triggers=risk_trigger_items,
+                human_triggers=human_trigger_items,
+                task_attributes=attribute_items,
+            )
+        )
+        if canonical_json_bytes(final_current) != current_canonical:
+            raise WorkflowEngineError(
+                "trusted project resolution-to-resume gate preview changed during "
+                "verification"
+            )
+
+        result = dict(current)
+        result.update(
+            {
+                "status": (
+                    "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_TO_RESUME_"
+                    "GATE_PREVIEW_VERIFIED"
+                ),
+                "captured_gate_preview_path": captured_snapshot[0],
+                "captured_gate_preview_size_bytes": captured_snapshot[1],
+                "captured_gate_preview_sha256": captured_snapshot[2],
+                "captured_gate_preview_identity_status": "UNCHANGED_DURING_QUERY",
+                "current_gate_preview_identity_status": "UNCHANGED_DURING_QUERY",
+            }
+        )
+        return result
+
     def trusted_project_pending_decision_queue_verification(
         self,
         queue_path: Path,

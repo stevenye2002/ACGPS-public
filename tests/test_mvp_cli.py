@@ -1953,6 +1953,116 @@ class MVPCLITests(unittest.TestCase):
         )
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_captured_project_resolution_resume_gate_preview_without_state_writes(
+        self,
+    ) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        resolution_preview = self._run(
+            "project",
+            "pending-decision-resolution-preview",
+            *self._engine_arguments(),
+            "--resolution",
+            str(resolution_path),
+        )
+        resolution_preview_path = (
+            self.state_root / "pending-decision-resolution-preview.json"
+        )
+        resolution_preview_path.write_text(
+            json.dumps(resolution_preview, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        evidence_root = self.state_root / "project-resume-gate-verification-evidence"
+        evidence_root.mkdir()
+        planner_packet = generate_task_packet(
+            "PLANNER",
+            valid_intake(),
+            valid_policy_result(),
+        )
+        planner_packet_path = evidence_root / "planner-packet.json"
+        planner_packet_path.write_bytes(canonical_json_bytes(planner_packet) + b"\n")
+        planner_result_path = evidence_root / "planner-result.json"
+        planner_result_path.write_bytes(
+            canonical_json_bytes(
+                dict(
+                    valid_agent_result(),
+                    packet_id=planner_packet["packet_id"],
+                    role="PLANNER",
+                    summary="Completed the bounded Planner work for SPEC_READY.",
+                    changed_files=[],
+                    created_files=[],
+                    recommended_next_state="SPEC_READY",
+                )
+            )
+            + b"\n"
+        )
+        gate_preview = self._run(
+            "project",
+            "pending-decision-resolution-to-resume-gate-preview",
+            *self._engine_arguments(),
+            "--preview",
+            str(resolution_preview_path),
+            "--actor",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-28T01:04:00Z",
+            "--evidence",
+            str(planner_packet_path),
+            "--evidence",
+            str(planner_result_path),
+        )
+        gate_preview_path = self.state_root / "project-resolution-resume-gate-preview.json"
+        gate_preview_bytes = (
+            json.dumps(gate_preview, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        gate_preview_path.write_bytes(gate_preview_bytes)
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project",
+            "pending-decision-resolution-to-resume-gate-preview-verify",
+            *self._engine_arguments(),
+            "--gate-preview",
+            str(gate_preview_path),
+            "--preview",
+            str(resolution_preview_path),
+            "--actor",
+            "PLANNER",
+            "--created-at-utc",
+            "2026-08-28T01:04:00Z",
+            "--evidence",
+            str(planner_packet_path),
+            "--evidence",
+            str(planner_result_path),
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_TO_RESUME_GATE_PREVIEW_VERIFIED",
+        )
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["task_id"], "ftic-governance-1")
+        self.assertEqual(result["decision_id"], resolution["decision_id"])
+        self.assertEqual(result["target_state"], resolution["resume_state"])
+        self.assertEqual(
+            result["captured_gate_preview_sha256"],
+            hashlib.sha256(gate_preview_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            result["captured_gate_preview_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(
+            result["current_gate_preview_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(result["authorization_status"], "NOT_GRANTED")
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(
+            result["controls"]["workflow_transition"],
+            "NOT_PERFORMED",
+        )
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_previews_waiting_human_resume_gate_without_state_writes(self) -> None:
         resolution, resolution_path = self._waiting_human_resolution()
         evidence_root = self.state_root / "resume-gate-preview-evidence"

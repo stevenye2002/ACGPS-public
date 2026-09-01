@@ -203,6 +203,51 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
     )
+    project_pending_decision_resolution_to_resume_gate_preview_verify = (
+        project_commands.add_parser(
+            "pending-decision-resolution-to-resume-gate-preview-verify"
+        )
+    )
+    _add_project_arguments(
+        project_pending_decision_resolution_to_resume_gate_preview_verify,
+        include_state=True,
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--gate-preview",
+        required=True,
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--preview",
+        required=True,
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--actor",
+        required=True,
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--created-at-utc",
+        required=True,
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--evidence",
+        action="append",
+        required=True,
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--risk-trigger",
+        action="append",
+        default=[],
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--human-trigger",
+        action="append",
+        default=[],
+    )
+    project_pending_decision_resolution_to_resume_gate_preview_verify.add_argument(
+        "--task-attribute",
+        action="append",
+        default=[],
+    )
     project_pending_decision_queue_verify = project_commands.add_parser(
         "pending-decision-queue-verify"
     )
@@ -600,6 +645,28 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             profile_id=args.profile_id,
             read_only=True,
         ).trusted_project_pending_decision_resolution_to_resume_gate_preview(
+            Path(args.preview),
+            actor=args.actor,
+            evidence_paths=[Path(path) for path in args.evidence],
+            created_at_utc=args.created_at_utc,
+            risk_triggers=args.risk_trigger,
+            human_triggers=args.human_trigger,
+            task_attributes=_parse_attributes(args.task_attribute),
+        )
+
+    if (
+        args.group == "project"
+        and args.command
+        == "pending-decision-resolution-to-resume-gate-preview-verify"
+    ):
+        return WorkflowEngine(
+            policy_root=Path(args.policy_root),
+            state_root=Path(args.state_root),
+            project_root=Path(args.project_root),
+            profile_id=args.profile_id,
+            read_only=True,
+        ).trusted_project_pending_decision_resolution_to_resume_gate_preview_verification(
+            Path(args.gate_preview),
             Path(args.preview),
             actor=args.actor,
             evidence_paths=[Path(path) for path in args.evidence],
