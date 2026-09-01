@@ -1834,6 +1834,54 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(preview["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_captured_project_pending_decision_resolution_preview_without_state_writes(
+        self,
+    ) -> None:
+        resolution, resolution_path = self._waiting_human_resolution()
+        captured = self._run(
+            "project",
+            "pending-decision-resolution-preview",
+            *self._engine_arguments(),
+            "--resolution",
+            str(resolution_path),
+        )
+        capture_path = self.state_root / "pending-decision-resolution-preview.json"
+        capture_bytes = (json.dumps(captured, sort_keys=True) + "\n").encode("utf-8")
+        capture_path.write_bytes(capture_bytes)
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project",
+            "pending-decision-resolution-preview-verify",
+            *self._engine_arguments(),
+            "--preview",
+            str(capture_path),
+        )
+
+        self.assertEqual(
+            result["status"],
+            "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_PREVIEW_VERIFIED",
+        )
+        self.assertEqual(result["decision_id"], resolution["decision_id"])
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["task_id"], "ftic-governance-1")
+        self.assertEqual(result["authorization_status"], "NOT_EVALUATED")
+        self.assertEqual(
+            result["captured_preview_sha256"],
+            hashlib.sha256(capture_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            result["captured_preview_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(
+            result["current_preview_identity_status"],
+            "UNCHANGED_DURING_QUERY",
+        )
+        self.assertEqual(result["controls"]["state_write"], "NOT_PERFORMED")
+        self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_previews_waiting_human_resume_gate_without_state_writes(self) -> None:
         resolution, resolution_path = self._waiting_human_resolution()
         evidence_root = self.state_root / "resume-gate-preview-evidence"

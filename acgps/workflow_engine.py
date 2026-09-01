@@ -1692,6 +1692,68 @@ class WorkflowEngine:
             "controls": final_queue["controls"],
         }
 
+    def trusted_project_pending_decision_resolution_preview_verification(
+        self,
+        preview_path: Path,
+    ) -> dict[str, Any]:
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            preview_path
+        )
+        resolution_path = self._captured_resolution_path(captured)
+        current = self.trusted_project_pending_decision_resolution_preview(
+            resolution_path
+        )
+        captured_canonical = canonical_json_bytes(captured)
+        current_canonical = canonical_json_bytes(current)
+        if captured_canonical != current_canonical:
+            raise WorkflowEngineError(
+                "captured pending-decision resolution preview does not match "
+                "current trusted project state"
+            )
+
+        final_captured, final_captured_snapshot = (
+            self._read_strict_evidence_json_snapshot(preview_path)
+        )
+        if (
+            canonical_json_bytes(final_captured) != captured_canonical
+            or final_captured_snapshot != captured_snapshot
+        ):
+            raise WorkflowEngineError(
+                "captured pending-decision resolution preview identity changed "
+                "during verification"
+            )
+        final_resolution_path = self._captured_resolution_path(final_captured)
+        final_current = self.trusted_project_pending_decision_resolution_preview(
+            final_resolution_path
+        )
+        if canonical_json_bytes(final_current) != current_canonical:
+            raise WorkflowEngineError(
+                "trusted pending-decision resolution preview changed during "
+                "verification"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_PREVIEW_VERIFIED",
+            "decision_id": current["decision_id"],
+            "project_id": current["project_id"],
+            "task_id": current["task_id"],
+            "selected_option": current["selected_option"],
+            "resume_state": current["resume_state"],
+            "pending_request_status": current["pending_request_status"],
+            "authorization_status": current["authorization_status"],
+            "captured_preview_path": captured_snapshot[0],
+            "captured_preview_size_bytes": captured_snapshot[1],
+            "captured_preview_sha256": captured_snapshot[2],
+            "captured_preview_identity_status": "UNCHANGED_DURING_QUERY",
+            "current_preview_identity_status": "UNCHANGED_DURING_QUERY",
+            "resolution_identity": current["resolution_identity"],
+            "project_queue_identity_status": current[
+                "project_queue_identity_status"
+            ],
+            "control_store_authority": current["control_store_authority"],
+            "controls": current["controls"],
+        }
+
     def trusted_project_pending_decision_queue_verification(
         self,
         queue_path: Path,
@@ -3774,6 +3836,26 @@ class WorkflowEngine:
             if resolved.is_relative_to(root_resolved):
                 return f"{label}/{resolved.relative_to(root_resolved).as_posix()}", resolved
         raise WorkflowEngineError("evidence must be contained by the managed project or ACGPS state root")
+
+    def _captured_resolution_path(self, preview: dict[str, Any]) -> Path:
+        resolution_identity = preview.get("resolution_identity")
+        if not isinstance(resolution_identity, dict):
+            raise WorkflowEngineError(
+                "captured pending-decision resolution identity is invalid"
+            )
+        logical_path = resolution_identity.get("path")
+        if not isinstance(logical_path, str):
+            raise WorkflowEngineError("captured resolution path is invalid")
+        prefix, separator, relative = logical_path.partition("/")
+        roots = {"project": self.project_root, "state": self.state_root}
+        if not separator or prefix not in roots or not relative:
+            raise WorkflowEngineError("captured resolution path is invalid")
+        rebound_logical, resolved = self._evidence_location(
+            roots[prefix] / Path(relative)
+        )
+        if rebound_logical != logical_path:
+            raise WorkflowEngineError("captured resolution path is invalid")
+        return resolved
 
     @staticmethod
     def _embedded_evidence_binding(

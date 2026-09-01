@@ -180,6 +180,26 @@ SHA-256, and bounded identity status, but leaves authorization as
 launch a model or process. `task advance` remains the authoritative transition
 gate and revalidates the resolution if execution is later authorized.
 
+To verify a captured preview against the current trusted project state, run:
+
+```powershell
+python -m acgps project pending-decision-resolution-preview-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --preview path/to/captured-pending-decision-resolution-preview.json
+```
+
+The verifier resolves the captured preview's existing resolution identity only
+beneath the managed project or ACGPS state root, recomputes the trusted preview,
+and requires an exact type-preserving semantic match. It then rechecks both the
+captured preview and current trusted preview before returning their bounded
+identity status. It leaves authorization as `NOT_EVALUATED` and performs no
+workflow transition, persistent state write, model execution, or process
+launch. The result covers the verification window; it is not a cross-store
+atomic snapshot.
+
 ## Policy-bound task packet generation
 
 After a task has reached `CLASSIFIED`, an operator can generate a role packet

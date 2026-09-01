@@ -3614,6 +3614,309 @@ class WorkflowEngineTests(unittest.TestCase):
                     resolution_path
                 )
 
+    def test_trusted_project_pending_decision_resolution_preview_verification_matches_capture_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=17)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+            capture_path = (
+                state_root / "captures" / "pending-decision-resolution-preview.json"
+            )
+            capture_path.parent.mkdir(parents=True)
+            capture_bytes = (json.dumps(captured, sort_keys=True) + "\n").encode("utf-8")
+            capture_path.write_bytes(capture_bytes)
+            before = tree_bytes(state_root)
+
+            result = (
+                reader.trusted_project_pending_decision_resolution_preview_verification(
+                    capture_path
+                )
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "status": "TRUSTED_PROJECT_PENDING_DECISION_RESOLUTION_PREVIEW_VERIFIED",
+                    "decision_id": captured["decision_id"],
+                    "project_id": "FTIC",
+                    "task_id": "ftic-governance-1",
+                    "selected_option": "RESUME",
+                    "resume_state": "SPEC_READY",
+                    "pending_request_status": "PENDING",
+                    "authorization_status": "NOT_EVALUATED",
+                    "captured_preview_path": (
+                        "state/captures/pending-decision-resolution-preview.json"
+                    ),
+                    "captured_preview_size_bytes": len(capture_bytes),
+                    "captured_preview_sha256": hashlib.sha256(
+                        capture_bytes
+                    ).hexdigest(),
+                    "captured_preview_identity_status": "UNCHANGED_DURING_QUERY",
+                    "current_preview_identity_status": "UNCHANGED_DURING_QUERY",
+                    "resolution_identity": captured["resolution_identity"],
+                    "project_queue_identity_status": "UNCHANGED_DURING_QUERY",
+                    "control_store_authority": captured["control_store_authority"],
+                    "controls": {
+                        "model_execution": "NOT_STARTED",
+                        "process_launch": "NOT_STARTED",
+                        "state_write": "NOT_PERFORMED",
+                        "workflow_transition": "NOT_PERFORMED",
+                    },
+                },
+            )
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_pending_decision_resolution_preview_verification_preserves_json_types(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=18)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+            capture_path = state_root / "pending-decision-resolution-preview.json"
+
+            for replacement in (True, 1.0):
+                with self.subTest(replacement=replacement):
+                    changed = json.loads(json.dumps(captured))
+                    changed["resolution_identity"]["size_bytes"] = replacement
+                    capture_path.write_text(
+                        json.dumps(changed, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        WorkflowEngineError,
+                        "captured pending-decision resolution preview does not match",
+                    ):
+                        reader.trusted_project_pending_decision_resolution_preview_verification(
+                            capture_path
+                        )
+
+    def test_trusted_project_pending_decision_resolution_preview_verification_rejects_ambiguous_json_keys(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=19)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+            encoded_tail = json.dumps(captured, sort_keys=True)[1:]
+            capture_path = state_root / "pending-decision-resolution-preview.json"
+
+            for ambiguous_key in ("status", "STATUS"):
+                with self.subTest(ambiguous_key=ambiguous_key):
+                    capture_path.write_text(
+                        f'{{"{ambiguous_key}":"TAMPERED",{encoded_tail}\n',
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        WorkflowEngineError,
+                        "duplicate or case-fold-colliding JSON key",
+                    ):
+                        reader.trusted_project_pending_decision_resolution_preview_verification(
+                            capture_path
+                        )
+
+    def test_trusted_project_pending_decision_resolution_preview_verification_rejects_invalid_resolution_path(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=20)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+            captured["resolution_identity"]["path"] = (
+                "state/../state/decision-resolution-preview.json"
+            )
+            capture_path = state_root / "pending-decision-resolution-preview.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured resolution path is invalid",
+            ):
+                reader.trusted_project_pending_decision_resolution_preview_verification(
+                    capture_path
+                )
+
+    def test_trusted_project_pending_decision_resolution_preview_verification_rejects_capture_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=21)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(
+                canonical_json_bytes(waiting_human_resolution(waiting)) + b"\n"
+            )
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+            capture_path = state_root / "pending-decision-resolution-preview.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            read_snapshot = reader._read_strict_evidence_json_snapshot
+            capture_reads = 0
+
+            def mutate_after_first_capture_read(path: Path):
+                nonlocal capture_reads
+                result = read_snapshot(path)
+                if path == capture_path:
+                    capture_reads += 1
+                    if capture_reads == 1:
+                        changed = dict(captured, authorization_status="TAMPERED")
+                        capture_path.write_text(
+                            json.dumps(changed, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                return result
+
+            with patch.object(
+                reader,
+                "_read_strict_evidence_json_snapshot",
+                side_effect=mutate_after_first_capture_read,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "captured pending-decision resolution preview identity changed",
+            ):
+                reader.trusted_project_pending_decision_resolution_preview_verification(
+                    capture_path
+                )
+
+    def test_trusted_project_pending_decision_resolution_preview_verification_rejects_current_preview_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            waiting = advance_to_waiting_human(writer, hour=22)
+            resolution = waiting_human_resolution(waiting)
+            resolution_path = state_root / "decision-resolution-preview.json"
+            resolution_path.write_bytes(canonical_json_bytes(resolution) + b"\n")
+            reader = WorkflowEngine(
+                ROOT,
+                state_root,
+                MVP_FTIC_ROOT,
+                "ftic-v1",
+                read_only=True,
+            )
+            captured = reader.trusted_project_pending_decision_resolution_preview(
+                resolution_path
+            )
+            capture_path = state_root / "pending-decision-resolution-preview.json"
+            capture_path.write_text(
+                json.dumps(captured, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            current_preview = (
+                reader.trusted_project_pending_decision_resolution_preview
+            )
+            query_count = 0
+
+            def mutate_after_first_query(path: Path):
+                nonlocal query_count
+                result = current_preview(path)
+                query_count += 1
+                if query_count == 1:
+                    changed = dict(
+                        resolution,
+                        rationale="A changed human decision rationale.",
+                    )
+                    resolution_path.write_bytes(canonical_json_bytes(changed) + b"\n")
+                return result
+
+            with patch.object(
+                reader,
+                "trusted_project_pending_decision_resolution_preview",
+                side_effect=mutate_after_first_query,
+            ), self.assertRaisesRegex(
+                WorkflowEngineError,
+                "trusted pending-decision resolution preview changed during verification",
+            ):
+                reader.trusted_project_pending_decision_resolution_preview_verification(
+                    capture_path
+                )
+
     def test_trusted_project_pending_decision_queue_rejects_request_identity_drift(
         self,
     ) -> None:
