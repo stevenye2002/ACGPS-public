@@ -1498,6 +1498,21 @@ class WorkflowEngine:
             },
         }
 
+    def trusted_project_audit_lineage_summary(self) -> dict[str, Any]:
+        summary = self.trusted_project_progress_summary()
+        return {
+            "status": "TRUSTED_PROJECT_AUDIT_LINEAGE_SUMMARY",
+            "project_id": summary["project_id"],
+            "task_count": summary["task_count"],
+            "tasks": [
+                task["audit_verification"]
+                for task in summary["tasks"]
+            ],
+            "control_store_authority": summary["control_store_authority"],
+            "task_set_identity_status": summary["task_set_identity_status"],
+            "controls": summary["controls"],
+        }
+
     def trusted_project_progress_summary_verification(
         self,
         summary_path: Path,

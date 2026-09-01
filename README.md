@@ -77,6 +77,26 @@ bounded identity status. It reports the capture's path, size, and SHA-256 while
 remaining read-only. The result covers the verification window; it is not a
 global filesystem snapshot.
 
+## Trusted project audit-lineage summary
+
+An operator can project the existing audit-lineage verification for every task
+owned by the selected project profile into one read-only result:
+
+```powershell
+python -m acgps project audit-lineage-summary `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID
+```
+
+The command reuses the trusted project progress summary's stable task-ID order,
+project filtering, control-store authority, and final task-set identity check.
+Each task entry is the existing `AUDIT_LINEAGE_VERIFIED` result; the command
+does not reinterpret audit evidence, write workflow state, authorize a
+transition, or launch a model or process. Its bounded revalidation window is
+not a transaction-level snapshot of every project audit lineage at one instant.
+
 ## Trusted project next-action queue
 
 An operator can project every task's existing trusted next-action preview into
