@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+### v1.1 core release candidate
+
+This section collects the proposed v1.1.0 changes. It is not a publication record;
+the candidate still requires its own frozen review and human release authorization.
+
+### Added
+
+- Supervised Planner, Coder, Reviewer, and Verifier handoff/result previews, with
+  trusted task-packet verification against accepted policy and intake lineage.
+- Evidence-bound planning, implementation, review, verification, fix, human-resume,
+  release-candidate, and closeout gates, with read-only gate previews and committed
+  transition verification through a unified CLI entry point.
+- Read-only trusted task/project progress, audit-lineage summaries, next-action
+  and pending-decision queues, and human-resolution/resume previews.
+- Captured-output verification for project summaries, queues, resolution previews,
+  and the composed project assurance overview, including final identity rechecks
+  and stale/drift rejection.
+- A public specification-validation entry point using the existing contracts.
+
+### Changed
+
+- Clarified the runtime-neutral software-delivery assurance control-plane mission:
+  narrow ownership of authorization enforcement, evidence, review, state, and
+  human release-authorization records;
+  no claim to provide a general-purpose agent harness or universal runtime adapters.
+- Bound task-packet generation to trusted initialization/classification evidence
+  and tightened release-manifest, verification, and audit-lineage checks without
+  adding a historical-task migration path.
+- Consolidated operator documentation for the inherited core platform, release
+  checks, preserved state, and bounded pilot evidence.
+
+### Fixed
+
+- Allowed a zero-finding independent review to recommend `INTEGRATING` when no
+  current blocker exists, while retaining fix-required and blocker-closure rules.
+- Hardened preview/verification paths against unsupported transitions, snapshot
+  drift, and JSON boolean/numeric type confusion through regression coverage.
+
+### Scope and validation boundary
+
+- Windows Server 2022 / Python 3.13; local, single-user, human-supervised core.
+- Existing FTIC source-change closeout and integrated project-assurance dogfood
+  evidence remain frozen outside the public source archive.
+- Bounded execution remains implemented, unqualified, and disabled by default.
+  P4/P5 qualification, autonomous model execution, new adapters, live trading,
+  broker access, automatic deployment, and automatic release remain out of scope.
+- This candidate-preparation gate changes release documentation only; it adds no
+  product feature, schema, authority layer, or dependency.
+
 ## [1.0.0] - 2026-08-26
 
 ### Added

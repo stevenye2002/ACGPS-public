@@ -11,16 +11,24 @@ It coordinates:
 - deterministic workflow gates, audit records, and release authorization;
 - conditional routing of Superpowers, Figma, deep-interview, browser, security, and project-specific skills.
 
-## v1.0 core objective
+## v1.1 core objective
 
 Deliver a CLI-first, local workflow controller for human-supervised development on Windows Server 2022 with Python 3.13. It can register a project, intake a task, classify risk, determine required skills and gates, generate role-specific task packets, expose pending human decisions, validate evidence, and integrate with the existing review kit.
 
-The bounded coding executor is included as an implemented but unqualified capability and is disabled by default. ACGPS v1.0 core does not authorize autonomous model execution, live trading, broker credentials, deployment, or release actions.
+ACGPS owns delivery-authorization enforcement, evidence binding, review gates,
+audit lineage, and human release-authorization records. Humans retain release
+authority; ACGPS is not a general-purpose agent runtime or sandbox.
+The v1.1 core consolidates supervised role handoffs and result receipts, trusted
+transition verification, and read-only task/project assurance views. Runtime-neutral
+contracts do not imply that adapters for every external coding agent are implemented
+or qualified.
+
+The bounded coding executor is included as an implemented but unqualified capability and is disabled by default. ACGPS v1.1 core does not authorize autonomous model execution, live trading, broker credentials, deployment, or release actions.
 
 ## Quick orientation
 
 - Goal: `docs/PROJECT_GOAL.md`
-- Scope: `docs/MVP_SCOPE.md`
+- Inherited core scope and non-goals: `docs/MVP_SCOPE.md`
 - Design: `docs/SYSTEM_DESIGN.md`
 - Security and privacy: `docs/SECURITY_AND_PRIVACY.md`
 - Workflow states: `docs/WORKFLOW_STATE_MACHINE.md`
@@ -32,6 +40,7 @@ The bounded coding executor is included as an implemented but unqualified capabi
 python -m pip install -r requirements.txt
 python scripts/check.py setup
 python scripts/check.py full
+python scripts/validate_spec.py
 ```
 
 ## Trusted project progress summary
@@ -838,23 +847,23 @@ later Coder remediation handoff must provide the original plan-bound Coder
 packet followed by those exact failed-verification records. This does not alter
 the independent Reviewer evidence required for transitions from `TASK_REVIEW`.
 
-This public source boundary contains the reusable v1.0 core product, the inherited v0.1 design
+This public source boundary contains the reusable v1.1 core product, the inherited v0.1/v1.0 design
 documents, deterministic checks, and test fixtures. Private development
 decisions, review transcripts, proposal packs, and third-party research inputs
 are intentionally not part of the distribution.
 
-## v1.0 core release readiness
+## v1.1 core release readiness
 
-The v1.0 core release-readiness boundary is Windows Server 2022 with Python
-3.13 in human-supervised local-development mode. Bounded-executor P4/P5
+The v1.1 core retains the Windows Server 2022 with Python
+3.13 release-readiness boundary in human-supervised local-development mode. Bounded-executor P4/P5
 qualification and autonomous model execution are deferred. Ordinary unit tests
 remain portable where their applicability boundary permits.
 
 Build and verify the deterministic source artifact without publishing it:
 
 ```powershell
-python scripts/build_mvp_source_archive.py . dist/acgps-v1.0-core-source.zip
-python scripts/release_readiness.py --archive dist/acgps-v1.0-core-source.zip
+python scripts/build_mvp_source_archive.py . dist/acgps-v1.1.0-core-source.zip
+python scripts/release_readiness.py --archive dist/acgps-v1.1.0-core-source.zip
 python scripts/check.py release
 ```
 
@@ -862,6 +871,28 @@ python scripts/check.py release
 SHA-256 in the existing release-candidate manifest contract. An `RC_READY`
 manifest is evidence for a later human release decision; it does not authorize
 publishing, deployment, or production release.
+
+The existing readiness script checks the supported platform and deterministic
+archive contents. Its inherited v1.0 help/error labels describe the same core
+platform boundary; they are not a version selector. A `RELEASE_READY` result is
+not evidence that the full test suite ran, that a frozen candidate was independently
+reviewed, or that publication was authorized. Those are separate release conditions.
+
+### Existing state and upgrade boundary
+
+The v1.1 source distribution contains no user state and performs no automatic
+historical-task migration. Keep control stores, managed repositories, and frozen
+evidence separate from the source archive. Preserve the previous source artifact
+and back up the complete state root before changing the version used for a live
+project. Validate a preserved copy before adopting the new version; compatibility
+with every older control store is not claimed.
+
+Trusted views and packet generation require their existing authority, intake,
+policy, and audit evidence. Missing or stale evidence fails closed; do not invent
+historical intake proof to make an older task pass. Accepted `CLOSED` tasks and
+frozen pilot samples must not be reopened just to validate an upgrade. Restoring
+an older source artifact does not reverse state transitions or establish that an
+older executable can safely consume newer state.
 
 Before requesting any direct state transition, an operator can validate the
 current policy, required actor, and ordered evidence snapshots without changing
@@ -1008,9 +1039,19 @@ result unchanged. Unsupported audit tails fail closed; the command does not
 add a generic transition contract, write state, advance the workflow, launch a
 model or process, or authorize any external action.
 
-## Intended first pilot
+## Pilot evidence and limits
 
-FTIC is the first dogfood project. The v1.0 core pilot validates the supervised workflow and governance integration without changing FTIC's intelligence, evidence, forecast, report, trading, or broker behavior.
+FTIC is the first dogfood project. In addition to the original core governance
+pilot, a separately authorized supervised FTIC source-change task reached `CLOSED`
+with Coder results, independent review, verification evidence, and human acceptance
+recorded by ACGPS. An integrated project-assurance sample exercised active and
+waiting tasks, fresh overview verification, and rejection of a stale capture while
+preserving the historical closed task.
+
+These are bounded pilot results, not general runtime or sandbox qualification.
+Private pilot records are retained outside this source distribution. ACGPS does
+not contain FTIC business logic, and the pilots do not authorize autonomous coding,
+live trading, broker access, or reopening frozen tasks.
 
 ## License
 
