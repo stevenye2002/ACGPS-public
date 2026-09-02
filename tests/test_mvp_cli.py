@@ -1340,6 +1340,60 @@ class MVPCLITests(unittest.TestCase):
         self.assertEqual(result["controls"]["workflow_transition"], "NOT_PERFORMED")
         self.assertEqual(self._state_root_identity(self.state_root), before)
 
+    def test_cli_verifies_captured_project_assurance_overview_without_state_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        writer = WorkflowEngine(self.ROOT, self.state_root, self.FIXTURE_ROOT, "ftic-v1")
+        writer.intake(valid_intake())
+        captured = self._run("project", "assurance-overview", *self._engine_arguments())
+        capture_path = self.state_root / "overview.json"
+        capture_bytes = (json.dumps(captured, indent=2) + "\n").encode("utf-8")
+        capture_path.write_bytes(capture_bytes)
+        before = self._state_root_identity(self.state_root)
+
+        result = self._run(
+            "project", "assurance-overview-verify", *self._engine_arguments(),
+            "--overview", str(capture_path),
+        )
+
+        self.assertEqual(result["status"], "TRUSTED_PROJECT_ASSURANCE_OVERVIEW_VERIFIED")
+        self.assertEqual(result["project_id"], "FTIC")
+        self.assertEqual(result["task_count"], 1)
+        self.assertEqual(result["state_counts"], {"DRAFT": 1})
+        self.assertEqual(result["captured_overview_path"], "state/overview.json")
+        self.assertEqual(result["captured_overview_size_bytes"], len(capture_bytes))
+        self.assertEqual(result["captured_overview_sha256"], hashlib.sha256(capture_bytes).hexdigest())
+        self.assertEqual(result["captured_overview_identity_status"], "UNCHANGED_DURING_QUERY")
+        self.assertEqual(result["current_overview_identity_status"], "UNCHANGED_DURING_QUERY")
+        self.assertEqual(result["controls"], {
+            "model_execution": "NOT_STARTED", "process_launch": "NOT_STARTED",
+            "state_write": "NOT_PERFORMED", "workflow_transition": "NOT_PERFORMED",
+        })
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
+        capture_path.write_text(json.dumps(dict(captured, task_count=True)), encoding="utf-8")
+        before_rejection = self._state_root_identity(self.state_root)
+        rejected = self._run(
+            "project", "assurance-overview-verify", *self._engine_arguments(),
+            "--overview", str(capture_path), expected_exit=2,
+        )
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("does not match", rejected["error"])
+        self.assertEqual(self._state_root_identity(self.state_root), before_rejection)
+
+    def test_cli_assurance_overview_verification_does_not_initialize_missing_state(
+        self,
+    ) -> None:
+        before = self._state_root_identity(self.state_root)
+        rejected = self._run(
+            "project", "assurance-overview-verify", *self._engine_arguments(),
+            "--overview", str(self.state_root / "missing.json"), expected_exit=2,
+        )
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertEqual(self._state_root_identity(self.state_root), before)
+
     def test_cli_reports_trusted_project_audit_lineage_summary_without_state_writes(
         self,
     ) -> None:

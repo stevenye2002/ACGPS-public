@@ -101,6 +101,33 @@ transaction-level or global filesystem snapshot. The command writes JSON only
 to stdout and does not write workflow state, authorize a transition, launch a
 model or process, or invoke an execution adapter.
 
+An operator can also verify a previously captured overview against the current
+trusted project state:
+
+```powershell
+python -m acgps project assurance-overview-verify `
+  --policy-root path/to/acgps `
+  --state-root path/to/state `
+  --project-root path/to/project `
+  --profile-id PROFILE_ID `
+  --overview path/to/state/captured-assurance-overview.json
+```
+
+The capture must be an existing JSON object beneath the selected project or
+state root. The command reuses the strict evidence reader, rejecting duplicate
+or case-colliding keys, and compares the entire captured overview with a newly
+computed overview using type-preserving canonical JSON. Whitespace and object
+key order do not affect this comparison, but boolean, integer, and floating-point
+values remain distinct. It then recomputes the current overview and rechecks the
+capture's path, size, SHA-256, and parsed content before returning
+`TRUSTED_PROJECT_ASSURANCE_OVERVIEW_VERIFIED`. Stale, altered, invalid, or drifting
+inputs fail closed. The response includes capture identity, current project
+counts, and bounded identity statuses; it is written only to stdout. No workflow
+state is created or changed, and no transition, model, process, or adapter is
+started. Verification covers the bounded read window, not a global atomic
+snapshot, the capture's original provenance or creation time, release approval,
+or continued validity after the query.
+
 ## Trusted project audit-lineage summary
 
 An operator can project the existing audit-lineage verification for every task

@@ -3234,6 +3234,253 @@ class WorkflowEngineTests(unittest.TestCase):
             self.assertEqual(result["tasks"], [])
             self.assertEqual(tree_bytes(state_root), before)
 
+    def test_trusted_project_assurance_overview_verification_matches_capture_without_writes(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine
+
+        for task_count in (0, 2):
+            with self.subTest(task_count=task_count), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp) / "state"
+                writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                for index in range(task_count):
+                    writer.intake(dict(valid_intake(), task_id=f"ftic-governance-{index + 1}"))
+                reader = WorkflowEngine(
+                    ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+                )
+                captured = reader.trusted_project_assurance_overview()
+                capture_path = state_root / "overview.json"
+                reordered = dict(reversed(list(captured.items())))
+                capture_bytes = (json.dumps(reordered, indent=2) + "\n").encode("utf-8")
+                capture_path.write_bytes(capture_bytes)
+                before = tree_bytes(state_root)
+                project_before = tree_bytes(MVP_FTIC_ROOT)
+
+                verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+                self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+                result = verifier(capture_path)
+
+                self.assertEqual(result, {
+                    "status": "TRUSTED_PROJECT_ASSURANCE_OVERVIEW_VERIFIED",
+                    "project_id": "FTIC",
+                    "task_count": task_count,
+                    "state_counts": {"DRAFT": task_count} if task_count else {},
+                    "captured_overview_path": "state/overview.json",
+                    "captured_overview_size_bytes": len(capture_bytes),
+                    "captured_overview_sha256": hashlib.sha256(capture_bytes).hexdigest(),
+                    "captured_overview_identity_status": "UNCHANGED_DURING_QUERY",
+                    "current_overview_identity_status": "UNCHANGED_DURING_QUERY",
+                    "control_store_authority": captured["control_store_authority"],
+                    "controls": {
+                        "model_execution": "NOT_STARTED",
+                        "process_launch": "NOT_STARTED",
+                        "state_write": "NOT_PERFORMED",
+                        "workflow_transition": "NOT_PERFORMED",
+                    },
+                })
+                self.assertEqual(tree_bytes(state_root), before)
+                self.assertEqual(tree_bytes(MVP_FTIC_ROOT), project_before)
+
+    def test_trusted_project_assurance_overview_verification_rejects_changed_capture(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            writer.intake(valid_intake())
+            reader = WorkflowEngine(
+                ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+            )
+            captured = reader.trusted_project_assurance_overview()
+            capture_path = state_root / "overview.json"
+            verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+            self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+            changes = (
+                (("project_id",), "OTHER"),
+                (("task_count",), True),
+                (("task_count",), 1.0),
+                (("state_counts", "DRAFT"), True),
+                (("state_counts", "DRAFT"), 1.0),
+                (("progress_summary", "tasks"), []),
+                (("audit_lineage_summary", "tasks"), []),
+                (("next_action_queue", "queue"), []),
+                (("pending_decision_queue", "decisions"), [{}]),
+                (("control_store_authority", "authority_id"), "other-authority"),
+                (("controls", "state_write"), "PERFORMED"),
+                (("overview_identity_status",), "STALE"),
+            )
+            for path, replacement in changes:
+                with self.subTest(path=path, replacement=replacement):
+                    changed = json.loads(json.dumps(captured))
+                    target = changed
+                    for key in path[:-1]:
+                        target = target[key]
+                    target[path[-1]] = replacement
+                    capture_path.write_text(json.dumps(changed), encoding="utf-8")
+                    before = tree_bytes(state_root)
+                    with self.assertRaisesRegex(WorkflowEngineError, "does not match"):
+                        verifier(capture_path)
+                    self.assertEqual(tree_bytes(state_root), before)
+
+            for change in ("missing", "extra"):
+                with self.subTest(change=change):
+                    changed = dict(captured)
+                    if change == "missing":
+                        del changed["audit_lineage_summary"]
+                    else:
+                        changed["extra"] = True
+                    capture_path.write_text(json.dumps(changed), encoding="utf-8")
+                    before = tree_bytes(state_root)
+                    with self.assertRaisesRegex(WorkflowEngineError, "does not match"):
+                        verifier(capture_path)
+                    self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_assurance_overview_verification_rejects_invalid_json(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            reader = WorkflowEngine(
+                ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+            )
+            verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+            self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+            capture_path = state_root / "overview.json"
+            for payload in (
+                b"\xff", b"{", b"[]",
+                b'{"status":"x","status":"y"}',
+                b'{"status":"x","STATUS":"y"}',
+                b'{"progress_summary":{"task_count":1,"TASK_COUNT":1}}',
+            ):
+                with self.subTest(payload=payload):
+                    capture_path.write_bytes(payload)
+                    before = tree_bytes(state_root)
+                    with self.assertRaises(WorkflowEngineError):
+                        verifier(capture_path)
+                    self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_assurance_overview_verification_rejects_invalid_paths(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            reader = WorkflowEngine(
+                ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+            )
+            outside = Path(tmp) / "outside.json"
+            outside.write_text(json.dumps(reader.trusted_project_assurance_overview()), encoding="utf-8")
+            verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+            self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+            for path in (outside, state_root / "missing.json", state_root):
+                with self.subTest(path=path):
+                    before = tree_bytes(Path(tmp))
+                    with self.assertRaises(WorkflowEngineError):
+                        verifier(path)
+                    self.assertEqual(tree_bytes(Path(tmp)), before)
+
+    def test_trusted_project_assurance_overview_verification_rejects_stale_capture(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            reader = WorkflowEngine(
+                ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+            )
+            capture_path = state_root / "overview.json"
+            capture_path.write_text(json.dumps(reader.trusted_project_assurance_overview()), encoding="utf-8")
+            writer.intake(valid_intake())
+            before = tree_bytes(state_root)
+            verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+            self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+            with self.assertRaisesRegex(WorkflowEngineError, "does not match"):
+                verifier(capture_path)
+            self.assertEqual(tree_bytes(state_root), before)
+
+    def test_trusted_project_assurance_overview_verification_rejects_capture_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        for drift_query in (1, 2):
+            for semantic_change in (False, True):
+                with self.subTest(drift_query=drift_query, semantic_change=semantic_change), tempfile.TemporaryDirectory() as tmp:
+                    state_root = Path(tmp) / "state"
+                    WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+                    reader = WorkflowEngine(
+                        ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+                    )
+                    captured = reader.trusted_project_assurance_overview()
+                    capture_path = state_root / "overview.json"
+                    capture_bytes = json.dumps(captured).encode("utf-8")
+                    capture_path.write_bytes(capture_bytes)
+                    replacement = (
+                        json.dumps(dict(captured, task_count=1)).encode("utf-8")
+                        if semantic_change else capture_bytes + b"\n"
+                    )
+                    expected_files = tree_bytes(state_root)
+                    expected_files["overview.json"] = replacement
+                    overview = reader.trusted_project_assurance_overview
+                    query_count = 0
+
+                    def mutate_after_query():
+                        nonlocal query_count
+                        result = overview()
+                        query_count += 1
+                        if query_count == drift_query:
+                            capture_path.write_bytes(replacement)
+                        return result
+
+                    verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+                    self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+                    with patch.object(reader, "trusted_project_assurance_overview", side_effect=mutate_after_query):
+                        with self.assertRaisesRegex(WorkflowEngineError, "captured project assurance overview identity changed"):
+                            verifier(capture_path)
+                    self.assertEqual(tree_bytes(state_root), expected_files)
+
+    def test_trusted_project_assurance_overview_verification_rejects_current_overview_drift(
+        self,
+    ) -> None:
+        from acgps.workflow_engine import WorkflowEngine, WorkflowEngineError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "state"
+            writer = WorkflowEngine(ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1")
+            reader = WorkflowEngine(
+                ROOT, state_root, MVP_FTIC_ROOT, "ftic-v1", read_only=True
+            )
+            capture_path = state_root / "overview.json"
+            capture_path.write_text(json.dumps(reader.trusted_project_assurance_overview()), encoding="utf-8")
+            overview = reader.trusted_project_assurance_overview
+            query_count = 0
+            expected_files = None
+
+            def mutate_after_first_query():
+                nonlocal query_count, expected_files
+                result = overview()
+                query_count += 1
+                if query_count == 1:
+                    writer.intake(valid_intake())
+                    expected_files = tree_bytes(state_root)
+                return result
+
+            verifier = getattr(reader, "trusted_project_assurance_overview_verification", None)
+            self.assertIsNotNone(verifier, "assurance overview verifier is missing")
+            with patch.object(reader, "trusted_project_assurance_overview", side_effect=mutate_after_first_query):
+                with self.assertRaisesRegex(WorkflowEngineError, "trusted project assurance overview changed during verification"):
+                    verifier(capture_path)
+            self.assertEqual(tree_bytes(state_root), expected_files)
+
     def test_trusted_project_audit_lineage_summary_projects_existing_verifications_without_writes(
         self,
     ) -> None:

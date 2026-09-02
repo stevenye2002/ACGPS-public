@@ -1642,6 +1642,52 @@ class WorkflowEngine:
             "overview_identity_status": "UNCHANGED_DURING_QUERY",
         }
 
+    def trusted_project_assurance_overview_verification(
+        self,
+        overview_path: Path,
+    ) -> dict[str, Any]:
+        captured, captured_snapshot = self._read_strict_evidence_json_snapshot(
+            overview_path
+        )
+        current = self.trusted_project_assurance_overview()
+        captured_canonical = canonical_json_bytes(captured)
+        current_canonical = canonical_json_bytes(current)
+        if captured_canonical != current_canonical:
+            raise WorkflowEngineError(
+                "captured project assurance overview does not match current trusted project state"
+            )
+
+        final_current = self.trusted_project_assurance_overview()
+        if canonical_json_bytes(final_current) != current_canonical:
+            raise WorkflowEngineError(
+                "trusted project assurance overview changed during verification"
+            )
+        # Recheck the capture after recomputing the current overview, too.
+        final_captured, final_captured_snapshot = (
+            self._read_strict_evidence_json_snapshot(overview_path)
+        )
+        if (
+            canonical_json_bytes(final_captured) != captured_canonical
+            or final_captured_snapshot != captured_snapshot
+        ):
+            raise WorkflowEngineError(
+                "captured project assurance overview identity changed during verification"
+            )
+
+        return {
+            "status": "TRUSTED_PROJECT_ASSURANCE_OVERVIEW_VERIFIED",
+            "project_id": current["project_id"],
+            "task_count": current["task_count"],
+            "state_counts": current["state_counts"],
+            "captured_overview_path": captured_snapshot[0],
+            "captured_overview_size_bytes": captured_snapshot[1],
+            "captured_overview_sha256": captured_snapshot[2],
+            "captured_overview_identity_status": "UNCHANGED_DURING_QUERY",
+            "current_overview_identity_status": "UNCHANGED_DURING_QUERY",
+            "control_store_authority": current["control_store_authority"],
+            "controls": current["controls"],
+        }
+
     def trusted_project_audit_lineage_summary(self) -> dict[str, Any]:
         summary = self.trusted_project_progress_summary()
         return {
